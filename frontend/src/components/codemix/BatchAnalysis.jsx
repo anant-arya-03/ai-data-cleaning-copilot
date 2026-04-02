@@ -1,372 +1,559 @@
-import React, { useState, useCallback } from 'react';
-import { useDropzone } from 'react-dropzone';
-import axios from 'axios';
-import { UploadCloud, FileSpreadsheet, Play, CheckCircle, Download, Database, BarChart2 } from 'lucide-react';
-import Papa from 'papaparse';
+import React, { useState, useRef } from 'react';
+import { Upload, FileText, CheckCircle, Play, Loader2, Download, Table, Code, Type, LayoutList, Layers } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
+import Papa from 'papaparse';
 
-const COLORS = ['#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#0ea5e9', '#64748b'];
-
-export default function BatchAnalysis({ apiUrl, backendUrl }) {
+export default function BatchAnalysis() {
   const [file, setFile] = useState(null);
-  const [data, setData] = useState([]);
-  const [headers, setHeaders] = useState([]);
-  const [textCols, setTextCols] = useState([]);
-  const [selectedCols, setSelectedCols] = useState([]);
-  const [modelType, setModelType] = useState('smart');
-
+  const [data, setData] = useState(null);
+  const [columns, setColumns] = useState([]);
+  const [selectedCol, setSelectedCol] = useState("");
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [processedData, setProcessedData] = useState(null);
-  const [error, setError] = useState('');
+  const [activeRowIdx, setActiveRowIdx] = useState(null);
+  const [activeTab, setActiveTab] = useState('model');
+  const fileInputRef = useRef(null);
+  const [error, setError] = useState(null);
 
-  const onDrop = useCallback((acceptedFiles) => {
-    const uploadedFile = acceptedFiles[0];
+  const handleFileUpload = (e) => {
+    const uploadedFile = e.target.files?.[0];
     if (!uploadedFile) return;
 
     setFile(uploadedFile);
-    setError('');
+    setError(null);
     setProcessedData(null);
-    setProgress(0);
+    setActiveRowIdx(null);
 
-    Papa.parse(uploadedFile, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        if (results.data.length === 0) {
-          setError("CSV file is empty.");
-          return;
-        }
-        setData(results.data);
-        const cols = Object.keys(results.data[0]);
-        setHeaders(cols);
+    // Fast preview using PapaParse for CSV, fallback to basic preview
+    if (uploadedFile.name.endsWith('.csv')) {
+      Papa.parse(uploadedFile, {
+        header: true,
+        preview: 10,
+        skipEmptyLines: true,
+        complete: (results) => {
+          if (results.data.length > 0) {
+            setData(results.data);
+            const cols = Object.keys(results.data[0]);
+            setColumns(cols);
 
-        const detectedText = cols.filter(c => {
-          const val = results.data[0][c];
-          return typeof val === 'string' && isNaN(Number(val));
-        });
-        setTextCols(detectedText);
-        setSelectedCols(detectedText.slice(0, 1));
-      }
-    });
-  }, []);
+            // Auto-detect text column
+            const textCol = cols.find(key => {
+               const val = results.data[0][key];
+               return typeof val === 'string' && val.length > 10;
+            });
+            if (textCol) setSelectedCol(textCol);
+            else setSelectedCol(cols[0]);
+          } else {
+             setError("CSV file is empty");
+          }
+        },
+        error: (err) => setError(err.message)
+      });
+    } else {
+        // Just show filename for excel, we will parse fully on backend
+        setData([{preview: "Excel file selected. Preview not available.", rows: "?"}]);
+        setColumns(["Upload ready"]);
+        setSelectedCol("");
+    }
+  };
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: { 'text/csv': ['.csv'] },
-    multiple: false
-  });
+  const handleDragOver = (e) => {
+    e.preventDefault();
+  };
 
-  const toggleCol = (col) => {
-    setSelectedCols(prev =>
-      prev.includes(col) ? prev.filter(c => c !== col) : [...prev, col]
-    );
+  const handleDrop = (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      fileInputRef.current.files = e.dataTransfer.files;
+      handleFileUpload({ target: { files: e.dataTransfer.files } });
+    }
   };
 
   const runBatch = async () => {
-    if (selectedCols.length === 0) {
-      setError("Please select at least one column to analyze.");
-      return;
+    if (!file || !selectedCol) return;
+    if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+        // If it's excel, we need the user to type the column name if we couldn't parse headers
+        if (!selectedCol) {
+            setError("Please type the name of the column to analyze");
+            return;
+        }
     }
+
     setProcessing(true);
-    setError('');
+    setProgress(10);
+    setError(null);
 
-    const resultData = [...data];
-    let currentCount = 0;
-    const totalCount = data.length * selectedCols.length;
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("text_column", selectedCol);
 
-    for (let i = 0; i < data.length; i++) {
-      const row = { ...data[i] };
+    try {
+        const response = await fetch("http://localhost:8000/nlp/batch_file", {
+            method: 'POST',
+            body: formData,
+        });
 
-      for (const col of selectedCols) {
-        const text = row[col];
-        if (!text || text.trim().length < 3) {
-           currentCount++;
-           continue;
+        setProgress(80);
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.detail || "Analysis failed");
         }
 
-        try {
-          const res = await axios.post(`${apiUrl}/predict/${modelType}`, { text });
+        const result = await response.json();
 
-          if (modelType === 'smart') {
-             row[`${col}_routed`] = res.data.routed_to || null;
-             if (res.data.routed_to === 'emosen') {
-                row[`${col}_sentiment`] = res.data.label || null;
-                row[`${col}_sentiment_conf`] = res.data.confidence || null;
-             } else {
-                row[`${col}_misinfo`] = res.data.misinfo?.label || null;
-                row[`${col}_misinfo_conf`] = res.data.misinfo?.confidence || null;
-                row[`${col}_fakenews`] = res.data.fakenews?.label || null;
-                row[`${col}_fakenews_conf`] = res.data.fakenews?.confidence || null;
-             }
-          } else if (modelType === 'all') {
-             row[`${col}_misinfo`] = res.data.misinfo?.label || null;
-             row[`${col}_misinfo_conf`] = res.data.misinfo?.confidence || null;
-             row[`${col}_fakenews`] = res.data.fakenews?.label || null;
-             row[`${col}_fakenews_conf`] = res.data.fakenews?.confidence || null;
-             row[`${col}_sentiment`] = res.data.emosen?.label || null;
-             row[`${col}_sentiment_conf`] = res.data.emosen?.confidence || null;
-          } else if (modelType === 'misinfo') {
-             row[`${col}_misinfo`] = res.data.label || null;
-             row[`${col}_misinfo_conf`] = res.data.confidence || null;
-          } else if (modelType === 'fakenews') {
-             row[`${col}_fakenews`] = res.data.label || null;
-             row[`${col}_fakenews_conf`] = res.data.confidence || null;
-          } else if (modelType === 'emosen') {
-             row[`${col}_sentiment`] = res.data.label || null;
-             row[`${col}_sentiment_conf`] = res.data.confidence || null;
-          }
+        // Convert full_analysis string back to object for UI
+        const parsedData = result.data.map(row => {
+            if (typeof row.full_analysis === 'string') {
+                try {
+                    row.full_analysis = JSON.parse(row.full_analysis);
+                } catch(e) {
+                    row.full_analysis = {};
+                }
+            }
+            return row;
+        });
 
-          if (res.data.text_analysis) {
-             row[`${col}_langs`] = res.data.text_analysis.languages_detected.join(', ');
-             row[`${col}_slang_count`] = res.data.text_analysis.slang_analysis.slang_count;
-             row[`${col}_code_mix_ratio`] = res.data.text_analysis.code_mix_ratio;
-          }
-        } catch (err) {
-           row[`${col}_error`] = 'API Failed';
+        setProcessedData(parsedData);
+        setProgress(100);
+
+        // Auto-select first row
+        if (parsedData.length > 0) {
+            setActiveRowIdx(0);
         }
-        currentCount++;
-        setProgress(Math.round((currentCount / totalCount) * 100));
-      }
-      resultData[i] = row;
+
+    } catch (err) {
+        setError(err.message);
+    } finally {
+        setProcessing(false);
     }
-
-    setProcessedData(resultData);
-    setProcessing(false);
   };
 
   const downloadResults = (format) => {
     if (!processedData) return;
 
+    // Omit the giant JSON column for CSV/Excel export
+    const exportData = processedData.map(({ full_analysis, ...rest }) => rest);
+
     if (format === 'csv') {
-      const csv = Papa.unparse(processedData);
+      const csv = Papa.unparse(exportData);
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement("a");
-      const url = URL.createObjectURL(blob);
-      link.setAttribute("href", url);
-      link.setAttribute("download", `batch_results.csv`);
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `batch_results_${Date.now()}.csv`;
       link.click();
-    } else {
-      const worksheet = XLSX.utils.json_to_sheet(processedData);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Results");
-      XLSX.writeFile(workbook, `batch_results.xlsx`);
+    } else if (format === 'excel') {
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Results");
+      XLSX.writeFile(wb, `batch_results_${Date.now()}.xlsx`);
+    }
+  };
+
+  const getActiveRowJson = () => {
+    if (activeRowIdx === null || !processedData || !processedData[activeRowIdx]) return null;
+    return processedData[activeRowIdx].full_analysis || {};
+  };
+
+  const renderTabContent = (json) => {
+    if (!json || Object.keys(json).length === 0) return <div className="text-slate-400 p-4">No data available for this row.</div>;
+
+    switch (activeTab) {
+        case 'model':
+            const allScores = json.all_scores || {};
+            return (
+                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <div className="flex gap-4 mb-6">
+                        <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg flex-1 shadow-sm">
+                            <div className="text-slate-500 text-sm mb-1 font-semibold uppercase tracking-wider">Label</div>
+                            <div className="text-2xl font-black text-slate-800 flex items-center capitalize">
+                                {json.label || "N/A"} {json.emoji && <span className="ml-2 text-3xl">{json.emoji}</span>}
+                            </div>
+                        </div>
+                        <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg flex-1 shadow-sm">
+                            <div className="text-slate-500 text-sm mb-1 font-semibold uppercase tracking-wider">Confidence</div>
+                            <div className="text-2xl font-black text-slate-800">
+                                {json.confidence ? `${json.confidence.toFixed(2)}%` : "N/A"}
+                            </div>
+                        </div>
+                    </div>
+                    {Object.keys(allScores).length > 0 && (
+                        <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
+                            <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">All Scores</div>
+                            {Object.entries(allScores).map(([key, val]) => (
+                                <div key={key} className="flex items-center justify-between mb-3 last:mb-0 bg-slate-50 p-2 rounded">
+                                    <span className="text-slate-700 font-medium capitalize">{key}</span>
+                                    <span className="text-indigo-600 font-mono font-bold">{val}%</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        case 'scripts':
+            const analysis = json.text_analysis || {};
+            return (
+                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
+                        <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">Scripts Detected</div>
+                        <div className="flex flex-wrap gap-2">
+                            {analysis.scripts_detected?.map((s, i) => (
+                                <span key={i} className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-full text-sm font-bold shadow-sm">{s}</span>
+                            )) || <span className="text-slate-400 italic">None</span>}
+                        </div>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
+                        <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">Languages Detected</div>
+                        <div className="flex flex-wrap gap-2">
+                            {analysis.languages_detected?.map((l, i) => (
+                                <span key={i} className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-full text-sm font-bold shadow-sm">{l}</span>
+                            )) || <span className="text-slate-400 italic">None</span>}
+                        </div>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-5 rounded-lg flex items-center justify-between shadow-sm">
+                        <div className="text-slate-500 text-sm font-semibold uppercase tracking-wider">Code-Mix Ratio</div>
+                        <div className="text-2xl font-black text-indigo-600 bg-indigo-50 px-4 py-1 rounded-lg border border-indigo-100">{analysis.code_mix_ratio || 0}</div>
+                    </div>
+                </div>
+            );
+        case 'slang':
+            const slang = json.slang_analysis || {};
+            return (
+                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
+                        <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">Internet Slang</div>
+                        <div className="flex flex-wrap gap-2">
+                            {slang.internet_slang?.length > 0 ? slang.internet_slang.map((s, i) => (
+                                <span key={i} className="bg-blue-50 text-blue-700 border border-blue-200 px-3 py-1.5 rounded-lg text-sm font-mono font-bold shadow-sm">{s}</span>
+                            )) : <span className="text-slate-400 text-sm italic">None</span>}
+                        </div>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
+                        <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">Hinglish Slang</div>
+                        <div className="flex flex-wrap gap-2">
+                            {slang.hinglish_slang?.length > 0 ? slang.hinglish_slang.map((s, i) => (
+                                <span key={i} className="bg-orange-50 text-orange-700 border border-orange-200 px-3 py-1.5 rounded-lg text-sm font-mono font-bold shadow-sm">{s}</span>
+                            )) : <span className="text-slate-400 text-sm italic">None</span>}
+                        </div>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
+                        <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">Abbreviations</div>
+                        <div className="flex flex-wrap gap-2">
+                            {slang.abbreviations?.length > 0 ? slang.abbreviations.map((s, i) => (
+                                <span key={i} className="bg-slate-100 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-lg text-sm font-mono font-bold shadow-sm">{s}</span>
+                            )) : <span className="text-slate-400 text-sm italic">None</span>}
+                        </div>
+                    </div>
+                    <div className="flex gap-4">
+                        <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg flex-1 shadow-sm">
+                            <div className="text-slate-500 text-sm mb-1 font-semibold uppercase tracking-wider">Total Slangs</div>
+                            <div className="text-2xl font-black text-slate-800">{slang.slang_count || 0}</div>
+                        </div>
+                        <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg flex-1 shadow-sm">
+                            <div className="text-slate-500 text-sm mb-1 font-semibold uppercase tracking-wider">Emojis Present</div>
+                            <div className="text-2xl font-black text-slate-800 tracking-widest">
+                                {slang.emojis_present?.join(' ') || "None"}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        case 'phonemes':
+            const phones = json.phoneme_hints || [];
+            return (
+                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    {phones.length > 0 ? phones.map((p, i) => (
+                        <div key={i} className="bg-white border border-slate-200 p-5 rounded-lg shadow-sm">
+                            <div className="text-indigo-600 font-black mb-3 text-lg border-b border-slate-100 pb-2">{p.pattern}</div>
+                            <div className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-2">Examples</div>
+                            <div className="flex gap-2">
+                               {p.examples?.map((ex, idx) => (
+                                  <span key={idx} className="bg-slate-50 border border-slate-200 px-3 py-1 rounded text-slate-700 font-mono font-medium">{ex}</span>
+                               ))}
+                            </div>
+                        </div>
+                    )) : <div className="text-slate-400 bg-white p-6 text-center border border-slate-200 rounded-lg">No specific phoneme patterns detected.</div>}
+                </div>
+            );
+        case 'stats':
+            const stats = json.text_stats || {};
+            return (
+                <div className="grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <div className="bg-white border border-slate-200 p-5 rounded-lg shadow-sm flex flex-col items-center justify-center text-center">
+                        <div className="text-slate-400 text-xs mb-1 font-bold uppercase tracking-wider">Word Count</div>
+                        <div className="text-3xl font-black text-indigo-600">{stats.word_count || 0}</div>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-5 rounded-lg shadow-sm flex flex-col items-center justify-center text-center">
+                        <div className="text-slate-400 text-xs mb-1 font-bold uppercase tracking-wider">Char Count</div>
+                        <div className="text-3xl font-black text-emerald-600">{stats.char_count || 0}</div>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-5 rounded-lg shadow-sm flex flex-col items-center justify-center text-center">
+                        <div className="text-slate-400 text-xs mb-1 font-bold uppercase tracking-wider">Avg Word Length</div>
+                        <div className="text-3xl font-black text-blue-600">{stats.avg_word_length || 0}</div>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-5 rounded-lg shadow-sm flex flex-col items-center justify-center text-center">
+                        <div className="text-slate-400 text-xs mb-1 font-bold uppercase tracking-wider">Hashtags</div>
+                        <div className="text-3xl font-black text-orange-500">{stats.hashtags?.length || 0}</div>
+                    </div>
+                </div>
+            );
+        default:
+            return null;
     }
   };
 
   return (
-    <div className="flex flex-col md:flex-row gap-6 h-full">
-
-      {/* Left Pane - Input & Config */}
-      <div className="flex-1 flex flex-col min-w-0 bg-white rounded-xl shadow-card border border-slate-200 overflow-hidden">
-        <div className="bg-slate-50 px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-          <h2 className="text-xl font-bold flex items-center text-slate-800">
-            <Database className="w-5 h-5 mr-2 text-indigo-500" />
-            Batch CSV Analysis
-          </h2>
-          {file && (
-             <button onClick={() => { setFile(null); setData([]); setProcessedData(null); }} className="text-sm font-bold text-slate-500 hover:text-indigo-600 transition-colors">
-               Change File
-             </button>
-          )}
-        </div>
-
-        <div className="flex-1 overflow-auto p-6">
-          {!file ? (
-            <div
-              {...getRootProps()}
-              className="border-2 border-dashed border-slate-300 hover:border-indigo-400 bg-slate-50 hover:bg-slate-100 rounded-xl p-12 text-center cursor-pointer transition-colors shadow-sm flex flex-col items-center justify-center min-h-[300px]"
-            >
-              <input {...getInputProps()} />
-              <UploadCloud className="w-12 h-12 text-indigo-400 mb-4" />
-              <p className="text-lg text-slate-700 font-bold">Drag & drop your CSV file here</p>
-              <p className="text-slate-500 mt-2 text-sm font-medium">To begin batch processing</p>
-            </div>
-          ) : (
-            <div className="space-y-8">
-              <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm flex items-center">
-                <FileSpreadsheet className="w-8 h-8 text-indigo-500 mr-4" />
-                <div>
-                  <p className="font-bold text-slate-800 text-lg">{file.name}</p>
-                  <p className="text-sm text-slate-500 font-medium">{data.length.toLocaleString()} rows loaded successfully</p>
+    <div className="flex flex-col lg:flex-row gap-6 h-[calc(100vh-160px)]">
+      {/* Left Pane - Table & Controls (Light Theme) */}
+      <div className="w-full lg:w-1/2 flex flex-col bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden relative">
+         <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center z-10">
+            <h2 className="font-bold text-slate-800 text-lg flex items-center">
+                <Table className="w-5 h-5 mr-2 text-indigo-500" />
+                Batch Data
+            </h2>
+            {processedData && (
+                <div className="flex gap-2">
+                    <button onClick={() => downloadResults('csv')} className="text-xs bg-white border border-slate-300 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-50 font-bold transition flex items-center shadow-sm">
+                        <Download className="w-3 h-3 mr-1" /> CSV
+                    </button>
+                    <button onClick={() => downloadResults('excel')} className="text-xs bg-white border border-slate-300 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-50 font-bold transition flex items-center shadow-sm">
+                        <Download className="w-3 h-3 mr-1" /> Excel
+                    </button>
                 </div>
-              </div>
+            )}
+         </div>
 
-              {error && <div className="text-rose-700 bg-rose-50 border border-rose-200 p-4 rounded-lg font-bold text-sm shadow-sm">{error}</div>}
-
-              {!processedData && !processing && (
-                <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 shadow-inner">
-                  <h4 className="font-bold text-slate-700 mb-3 flex items-center"><span className="bg-white w-6 h-6 rounded-full flex items-center justify-center text-indigo-600 shadow-sm border border-slate-200 mr-2 text-xs">1</span> Select Text Columns</h4>
-                  <div className="flex flex-wrap gap-2 mb-8 ml-8">
-                    {headers.map(col => (
-                      <label key={col} className={`flex items-center px-4 py-2 border rounded-lg cursor-pointer transition shadow-sm ${selectedCols.includes(col) ? 'bg-indigo-50 border-indigo-300 text-indigo-700 ring-1 ring-indigo-500' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'}`}>
-                        <input
-                          type="checkbox"
-                          className="hidden"
-                          checked={selectedCols.includes(col)}
-                          onChange={() => toggleCol(col)}
-                        />
-                        <span className="text-sm font-bold">{col}</span>
-                      </label>
-                    ))}
-                  </div>
-
-                  <h4 className="font-bold text-slate-700 mb-3 flex items-center"><span className="bg-white w-6 h-6 rounded-full flex items-center justify-center text-indigo-600 shadow-sm border border-slate-200 mr-2 text-xs">2</span> Select Analysis Model</h4>
-                  <div className="ml-8 mb-8">
-                    <select
-                      value={modelType}
-                      onChange={(e) => setModelType(e.target.value)}
-                      className="w-full bg-white border border-slate-300 rounded-lg px-4 py-3 text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm font-bold"
-                    >
-                      <option value="smart">Auto-Route (Smart Predict)</option>
-                      <option value="all">Run All Models</option>
-                      <option value="misinfo">Misinformation Detector only</option>
-                      <option value="fakenews">Fake News Classifier only</option>
-                      <option value="emosen">EmoSen Sentiment only</option>
-                    </select>
-                  </div>
-
-                  <button
-                    onClick={runBatch}
-                    className="w-full ml-8 max-w-[calc(100%-2rem)] bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-bold flex items-center justify-center transition shadow-md hover:shadow-lg"
-                  >
-                    <Play className="w-5 h-5 mr-2 fill-current" /> Start Batch Analysis
-                  </button>
-                </div>
-              )}
-
-              {processing && (
-                <div className="bg-white p-10 rounded-xl border border-slate-200 text-center shadow-sm">
-                   <div className="mb-6 flex justify-center">
-                      <div className="w-16 h-16 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
-                   </div>
-                   <h4 className="text-xl font-bold text-slate-800 mb-2">Processing {data.length.toLocaleString()} rows...</h4>
-                   <p className="text-slate-500 mb-6 font-medium">Please do not close this window.</p>
-                   <div className="w-full max-w-md mx-auto bg-slate-100 rounded-full h-4 overflow-hidden border border-slate-200 shadow-inner">
-                     <div className="bg-indigo-500 h-full transition-all duration-300 relative" style={{ width: `${progress}%` }}>
-                        <div className="absolute inset-0 bg-white/20 w-full h-full" style={{backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(255,255,255,0.2) 10px, rgba(255,255,255,0.2) 20px)'}}></div>
-                     </div>
-                   </div>
-                   <p className="mt-3 text-indigo-600 font-black text-2xl">{progress}%</p>
-                </div>
-              )}
-
-              {processedData && !processing && (
-                <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="bg-emerald-50 border border-emerald-200 p-6 rounded-xl flex items-center mb-6 shadow-sm">
-                    <CheckCircle className="w-8 h-8 mr-4 text-emerald-500 flex-shrink-0" />
-                    <div>
-                      <h4 className="font-bold text-emerald-800 text-lg">Batch Analysis Complete!</h4>
-                      <p className="text-sm font-medium text-emerald-600">Processed {processedData.length.toLocaleString()} rows. Results are shown in the right panel.</p>
+         {/* File Upload Area */}
+         {!data && (
+            <div className="flex-1 p-6 flex flex-col items-center justify-center">
+                <div
+                    className="w-full h-64 border-2 border-dashed border-indigo-200 rounded-xl bg-indigo-50/50 hover:bg-indigo-50 transition flex flex-col items-center justify-center cursor-pointer group"
+                    onClick={() => fileInputRef.current?.click()}
+                    onDragOver={handleDragOver}
+                    onDrop={handleDrop}
+                >
+                    <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-sm mb-4 group-hover:scale-110 transition-transform">
+                        <Upload className="w-8 h-8 text-indigo-500" />
                     </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                     <button onClick={() => downloadResults('csv')} className="flex items-center justify-center bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 py-4 rounded-xl font-bold transition shadow-sm hover:shadow-md">
-                       <Download className="w-5 h-5 mr-2 text-indigo-500" /> Download CSV
-                     </button>
-                     <button onClick={() => downloadResults('excel')} className="flex items-center justify-center bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 py-4 rounded-xl font-bold transition shadow-sm hover:shadow-md">
-                       <Download className="w-5 h-5 mr-2 text-emerald-500" /> Download Excel
-                     </button>
-                   </div>
+                    <p className="text-slate-700 font-bold text-lg mb-1">Click or drag file to this area to upload</p>
+                    <p className="text-slate-500 text-sm">Supports .csv, .xlsx, .xls</p>
                 </div>
-              )}
+                <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".csv,.xlsx,.xls" className="hidden" />
+
+                {error && (
+                    <div className="mt-4 bg-red-50 text-red-600 p-3 rounded-lg border border-red-200 text-sm font-medium w-full text-center">
+                        {error}
+                    </div>
+                )}
             </div>
-          )}
-        </div>
+         )}
+
+         {/* Data Preview & Analysis Controls */}
+         {data && !processedData && !processing && (
+            <div className="flex-1 flex flex-col overflow-hidden animate-in fade-in duration-300">
+                <div className="p-4 bg-white border-b border-slate-200">
+                    <div className="flex items-end gap-4">
+                        <div className="flex-1">
+                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Select Text Column to Analyze</label>
+                            {columns.length > 1 ? (
+                                <select
+                                    value={selectedCol}
+                                    onChange={(e) => setSelectedCol(e.target.value)}
+                                    className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                                >
+                                    <option value="" disabled>Select a column</option>
+                                    {columns.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                            ) : (
+                                <input
+                                    type="text"
+                                    value={selectedCol}
+                                    onChange={(e) => setSelectedCol(e.target.value)}
+                                    placeholder="Type column name (e.g. text)"
+                                    className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                                />
+                            )}
+                        </div>
+                        <button
+                            onClick={runBatch}
+                            disabled={!selectedCol}
+                            className={`px-6 py-2.5 rounded-lg font-bold flex items-center transition shadow-sm
+                                ${!selectedCol ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
+                        >
+                            <Play className="w-4 h-4 mr-2" /> Run Analysis
+                        </button>
+                    </div>
+                    {error && <div className="mt-3 text-red-500 text-sm font-medium">{error}</div>}
+                </div>
+
+                <div className="flex-1 overflow-auto bg-slate-50 p-4">
+                    <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
+                        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                            Data Preview (First 10 rows)
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                                    <tr>
+                                        {columns.map((col, idx) => (
+                                            <th key={idx} className={`px-4 py-3 whitespace-nowrap ${col === selectedCol ? 'bg-indigo-50 text-indigo-700' : ''}`}>
+                                                {col}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {data.map((row, idx) => (
+                                        <tr key={idx} className="hover:bg-slate-50">
+                                            {columns.map((col, cIdx) => (
+                                                <td key={cIdx} className={`px-4 py-2 max-w-[200px] truncate ${col === selectedCol ? 'bg-indigo-50/30 font-medium' : 'text-slate-600'}`}>
+                                                    {row[col]?.toString() || ''}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+         )}
+
+         {/* Processing State */}
+         {processing && (
+             <div className="flex-1 flex flex-col items-center justify-center p-8 bg-slate-50/50 backdrop-blur-sm absolute inset-0 z-20">
+                 <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 flex flex-col items-center max-w-sm w-full">
+                     <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
+                     <h3 className="text-xl font-bold text-slate-800 mb-2">Analyzing Data...</h3>
+                     <p className="text-sm text-slate-500 mb-6 text-center">Processing rows through NLP models. This might take a moment.</p>
+                     <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden border border-slate-200">
+                         <div className="bg-indigo-600 h-full transition-all duration-300 rounded-full" style={{ width: `${progress}%` }}></div>
+                     </div>
+                 </div>
+             </div>
+         )}
+
+         {/* Processed Data Table */}
+         {processedData && !processing && (
+             <div className="flex-1 overflow-auto animate-in fade-in duration-300">
+                 <table className="w-full text-sm text-left">
+                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0 shadow-sm z-10">
+                        <tr>
+                            <th className="px-4 py-3 w-12 text-center">#</th>
+                            <th className="px-4 py-3 min-w-[200px] max-w-[300px]">Text</th>
+                            <th className="px-4 py-3">Label</th>
+                            <th className="px-4 py-3">Mix Ratio</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                        {processedData.map((row, idx) => (
+                            <tr
+                                key={idx}
+                                onClick={() => setActiveRowIdx(idx)}
+                                className={`cursor-pointer transition-colors ${activeRowIdx === idx ? 'bg-indigo-50 border-l-4 border-l-indigo-500' : 'hover:bg-slate-50 border-l-4 border-l-transparent'}`}
+                            >
+                                <td className="px-4 py-3 text-slate-400 font-mono text-xs text-center">{idx + 1}</td>
+                                <td className="px-4 py-3 truncate max-w-[300px] text-slate-700 font-medium">
+                                    {row[selectedCol]?.toString() || row.text}
+                                </td>
+                                <td className="px-4 py-3">
+                                    {row.label ? (
+                                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold flex inline-flex items-center gap-1
+                                            ${row.label === 'positive' || row.label === 'true' ? 'bg-emerald-100 text-emerald-700' :
+                                              row.label === 'negative' || row.label === 'fake' ? 'bg-red-100 text-red-700' :
+                                              'bg-slate-100 text-slate-700'}`}>
+                                            {row.label} {row.emoji}
+                                        </span>
+                                    ) : <span className="text-slate-400 text-xs italic">N/A</span>}
+                                </td>
+                                <td className="px-4 py-3 text-slate-600 font-mono text-xs font-bold">
+                                    {row.code_mix_ratio || 0}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                 </table>
+             </div>
+         )}
       </div>
 
-      {/* Right Pane - Results Summary */}
-      <div className="w-full md:w-[400px] lg:w-[450px] flex flex-col bg-slate-50 rounded-xl shadow-inner border border-slate-200 overflow-hidden">
-        <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
-           <h2 className="text-lg font-bold text-slate-800">Results Summary</h2>
-        </div>
+      {/* Right Pane - Detail View (Matches Screenshot style but light theme) */}
+      <div className="w-full lg:w-1/2 flex flex-col bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden relative">
+         <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between z-10">
+            <h2 className="font-bold text-slate-800 text-lg flex items-center">
+                <Code className="w-5 h-5 mr-2 text-indigo-500" />
+                Row Analysis Output
+            </h2>
+            {activeRowIdx !== null && (
+                <div className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
+                    Row {activeRowIdx + 1} Selected
+                </div>
+            )}
+         </div>
 
-        <div className="flex-1 overflow-y-auto p-5">
-           {!processedData ? (
-             <div className="h-full flex items-center justify-center text-slate-400 font-medium text-center px-6">
-               Configure and run batch analysis on the left to see distribution charts here.
+         {!processedData ? (
+             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400">
+                 <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4 border border-slate-100 shadow-sm">
+                     <Layers className="w-8 h-8 text-slate-300" />
+                 </div>
+                 <p className="font-medium text-slate-500">Run batch analysis and click a row to view its detailed JSON output here.</p>
              </div>
-           ) : (
-             <div className="space-y-6 animate-in slide-in-from-right-4 fade-in duration-500">
-
-               <div className="bg-white border border-slate-200 p-5 rounded-xl shadow-sm">
-                 <h4 className="font-bold text-slate-800 mb-4 flex items-center border-b border-slate-100 pb-2">
-                    <BarChart2 className="w-4 h-4 mr-2 text-indigo-500" /> Primary Label Distribution
-                 </h4>
-
-                 {(() => {
-                    const stats = { labels: {}, langs: {}, total: 0 };
-                    processedData.forEach(row => {
-                      selectedCols.forEach(col => {
-                        stats.total++;
-                        let label = null;
-                        if (modelType === 'smart') label = row[`${col}_routed`] === 'emosen' ? row[`${col}_sentiment`] : (row[`${col}_misinfo`] || row[`${col}_fakenews`]);
-                        else if (modelType === 'all' || modelType === 'misinfo') label = row[`${col}_misinfo`];
-                        else if (modelType === 'fakenews') label = row[`${col}_fakenews`];
-                        else if (modelType === 'emosen') label = row[`${col}_sentiment`];
-
-                        if (!label && row[`${col}_fakenews`]) label = row[`${col}_fakenews`];
-                        if (!label && row[`${col}_sentiment`]) label = row[`${col}_sentiment`];
-
-                        if (label) {
-                          stats.labels[label] = (stats.labels[label] || 0) + 1;
-                        }
-
-                        if (row[`${col}_langs`]) {
-                           row[`${col}_langs`].split(', ').forEach(l => {
-                             stats.langs[l] = (stats.langs[l] || 0) + 1;
-                           });
-                        }
-                      });
-                    });
-
-                    const pieData = Object.entries(stats.labels).map(([name, value]) => ({name, value}));
-                    const langData = Object.entries(stats.langs).map(([name, value]) => ({name, value})).sort((a,b) => b.value - a.value);
-
-                    return (
-                      <div className="space-y-6">
-                        {pieData.length > 0 ? (
-                          <div className="h-56">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <PieChart>
-                                <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="value" label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
-                                  {pieData.map((entry, index) => (<Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />))}
-                                </Pie>
-                                <RechartsTooltip contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }} />
-                              </PieChart>
-                            </ResponsiveContainer>
-                          </div>
-                        ) : (
-                          <p className="text-sm text-slate-500 italic">No labels generated for this run.</p>
-                        )}
-
-                        {langData.length > 0 && (
-                          <div className="border border-slate-200 rounded-lg overflow-hidden shadow-sm">
-                            <div className="bg-slate-50 px-3 py-2 border-b border-slate-200 font-bold text-xs text-slate-600 uppercase tracking-wider">
-                               Language Presence
-                            </div>
-                            <table className="w-full text-sm text-left bg-white">
-                              <tbody className="divide-y divide-slate-100">
-                                {langData.map(l => (
-                                  <tr key={l.name} className="hover:bg-slate-50 transition-colors">
-                                    <td className="py-2.5 px-3 font-bold text-slate-700">{l.name}</td>
-                                    <td className="py-2.5 px-3 text-right text-indigo-600 font-mono font-bold text-xs">{l.value} <span className="text-slate-400 font-sans">rows</span></td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    );
-                 })()}
-               </div>
-
+         ) : activeRowIdx === null ? (
+             <div className="flex-1 flex items-center justify-center text-slate-500 font-medium">
+                 Click on a row in the left table to view details.
              </div>
-           )}
-        </div>
+         ) : (
+             <div className="flex-1 flex flex-col overflow-hidden animate-in fade-in duration-300">
+
+                 {/* Original Text Block */}
+                 <div className="p-5 border-b border-slate-200 bg-slate-50/50">
+                    <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Input Text</div>
+                    <div className="bg-white border border-slate-200 rounded-lg p-4 text-slate-800 font-medium shadow-sm break-words">
+                        {processedData[activeRowIdx]?.[selectedCol]?.toString() || processedData[activeRowIdx]?.text || "No text available"}
+                    </div>
+                 </div>
+
+                 {/* Tabs */}
+                 <div className="flex overflow-x-auto border-b border-slate-200 bg-slate-50 hide-scrollbar px-2">
+                    {[
+                        { id: 'model', label: 'Model Result' },
+                        { id: 'scripts', label: 'Scripts & Languages' },
+                        { id: 'slang', label: 'Slang Detected' },
+                        { id: 'phonemes', label: 'Phoneme Hints' },
+                        { id: 'stats', label: 'Text Stats' },
+                    ].map(tab => (
+                        <button
+                            key={tab.id}
+                            onClick={() => setActiveTab(tab.id)}
+                            className={`whitespace-nowrap px-4 py-3 text-sm font-bold transition-colors border-b-2
+                                ${activeTab === tab.id ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-100/50'}`}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                 </div>
+
+                 {/* Tab Content */}
+                 <div className="flex-1 overflow-auto p-5 bg-slate-50/50">
+                    {renderTabContent(getActiveRowJson())}
+                 </div>
+
+                 {/* Raw JSON View at Bottom */}
+                 <div className="h-64 border-t border-slate-200 flex flex-col">
+                    <div className="px-4 py-2 bg-slate-100 border-b border-slate-200 text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center justify-between">
+                        <span>Raw JSON Output</span>
+                        <span className="bg-slate-200 text-slate-500 px-2 py-0.5 rounded text-[10px]">models1.py format</span>
+                    </div>
+                    <div className="flex-1 bg-slate-900 overflow-auto p-4">
+                        <pre className="text-emerald-400 font-mono text-sm">
+                            {JSON.stringify(getActiveRowJson(), null, 2)}
+                        </pre>
+                    </div>
+                 </div>
+             </div>
+         )}
       </div>
     </div>
   );

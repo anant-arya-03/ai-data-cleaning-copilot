@@ -16,3 +16,7 @@ INFO:     127.0.0.1:57226 - "GET /nlp/health HTTP/1.1" 200 OK
 INFO:     127.0.0.1:57240 - "GET /nlp/health HTTP/1.1" 200 OK
 INFO:     127.0.0.1:56350 - "GET /nlp/health HTTP/1.1" 200 OK
 INFO:     127.0.0.1:56358 - "GET /nlp/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53274 - "GET /nlp/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53286 - "GET /nlp/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49242 - "GET /nlp/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49250 - "GET /nlp/health HTTP/1.1" 200 OK
