@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import pandas as pd
@@ -12,6 +13,8 @@ from anomaly import detect_anomalies, get_rename_suggestions
 from models1 import load_models, smart_predict, predict_batch, predict_misinfo, predict_fakenews, predict_emosen, predict_all, analyse_text
 
 app = FastAPI(title="AI Data Cleaning Copilot Backend")
+
+router = APIRouter(prefix="/api")
 
 # Initialize models at startup
 app.state.nlp_models = None
@@ -31,6 +34,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(router)
 
 # In-memory storage for the current dataset and state
 # (In a real production app with multiple users, use Redis or a DB. We use memory as per requirements.)
@@ -72,17 +77,17 @@ class NlpRequest(BaseModel):
 class NlpBatchRequest(BaseModel):
     texts: List[str]
 
-@app.get("/health")
+@router.get("/health")
 def health_check():
     return {"status": "ok"}
 
-@app.get("/nlp/health")
+@router.get("/nlp/health")
 def nlp_health():
     if app.state.nlp_models is None:
          return {"status": "offline", "message": "Models not loaded"}
     return {"status": "online"}
 
-@app.post("/nlp/predict/{model_type}")
+@router.post("/nlp/predict/{model_type}")
 def nlp_predict(model_type: str, req: NlpRequest):
     if app.state.nlp_models is None:
         # Load them on demand if failed on startup
@@ -106,7 +111,7 @@ def nlp_predict(model_type: str, req: NlpRequest):
     else:
         raise HTTPException(status_code=400, detail="Unknown model type")
 
-@app.post("/upload")
+@router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     if not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")
@@ -149,7 +154,7 @@ async def upload_file(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/override_type")
+@router.post("/override_type")
 def override_type(req: ColumnTypeOverride):
     if current_state["df"] is None:
         raise HTTPException(status_code=400, detail="No dataset loaded")
@@ -159,13 +164,13 @@ def override_type(req: ColumnTypeOverride):
     current_state["col_types"][req.column]["type"] = req.new_type
     return {"status": "success", "col_types": current_state["col_types"]}
 
-@app.get("/profile")
+@router.get("/profile")
 def get_profile():
     if current_state["df"] is None:
          raise HTTPException(status_code=400, detail="No dataset loaded")
     return generate_profile(current_state["df"], current_state["col_types"])
 
-@app.get("/duplicates")
+@router.get("/duplicates")
 def get_duplicates():
     if current_state["df"] is None:
          raise HTTPException(status_code=400, detail="No dataset loaded")
@@ -176,7 +181,7 @@ def get_duplicates():
         "rows": dups.fillna("").head(50).to_dict(orient="records") # Limit to 50 for preview
     }
 
-@app.post("/remove_duplicates")
+@router.post("/remove_duplicates")
 def remove_duplicates():
     if current_state["df"] is None:
          raise HTTPException(status_code=400, detail="No dataset loaded")
@@ -187,7 +192,7 @@ def remove_duplicates():
     after = len(df)
     return {"removed": before - after}
 
-@app.post("/missing_strategy")
+@router.post("/missing_strategy")
 def apply_missing(req: MissingValueRequest):
     if current_state["df"] is None:
          raise HTTPException(status_code=400, detail="No dataset loaded")
@@ -203,7 +208,7 @@ def apply_missing(req: MissingValueRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/flashfill/suggest")
+@router.post("/flashfill/suggest")
 def flashfill_suggest(req: FlashFillSuggestRequest):
     if current_state["df"] is None:
          raise HTTPException(status_code=400, detail="No dataset loaded")
@@ -214,7 +219,7 @@ def flashfill_suggest(req: FlashFillSuggestRequest):
     suggestions = get_suggestions(current_state["df"], req.column, c_type)
     return {"suggestions": suggestions}
 
-@app.post("/flashfill/apply")
+@router.post("/flashfill/apply")
 def flashfill_apply(req: FlashFillApplyRequest):
     if current_state["df"] is None:
          raise HTTPException(status_code=400, detail="No dataset loaded")
@@ -233,7 +238,7 @@ def flashfill_apply(req: FlashFillApplyRequest):
     except Exception as e:
          raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/anomalies/detect")
+@router.post("/anomalies/detect")
 def anomalies_detect(req: AnomalyRequest):
     if current_state["df"] is None:
          raise HTTPException(status_code=400, detail="No dataset loaded")
@@ -248,7 +253,7 @@ def anomalies_detect(req: AnomalyRequest):
 
     return res
 
-@app.post("/anomalies/action")
+@router.post("/anomalies/action")
 def anomalies_action(req: AnomalyActionRequest):
     if current_state["df"] is None:
          raise HTTPException(status_code=400, detail="No dataset loaded")
@@ -265,13 +270,13 @@ def anomalies_action(req: AnomalyActionRequest):
     current_state["col_types"] = detect_column_types(df)
     return {"status": "success"}
 
-@app.get("/rename/suggest")
+@router.get("/rename/suggest")
 def rename_suggest():
     if current_state["df"] is None:
          raise HTTPException(status_code=400, detail="No dataset loaded")
     return {"suggestions": get_rename_suggestions(current_state["df"])}
 
-@app.post("/rename/apply")
+@router.post("/rename/apply")
 def rename_apply(req: RenameApplyRequest):
     if current_state["df"] is None:
          raise HTTPException(status_code=400, detail="No dataset loaded")
@@ -280,7 +285,7 @@ def rename_apply(req: RenameApplyRequest):
     current_state["col_types"] = detect_column_types(current_state["df"])
     return {"status": "success", "new_columns": list(current_state["df"].columns)}
 
-@app.get("/export/data")
+@router.get("/export/data")
 def export_data():
     if current_state["df"] is None:
          raise HTTPException(status_code=400, detail="No dataset loaded")
