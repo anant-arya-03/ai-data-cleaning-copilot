@@ -4,25 +4,19 @@ A production-grade, two-mode web application for advanced data cleaning and NLP 
 
 ## Setup Instructions
 
-### 1. Start the NLP Model API
-`cd /app`
-`python unified_api.py`
-
-*Wait for "Model ready" messages for all 3 models. API runs on http://localhost:5000.*
-
-### 2. Start the Backend
-Open a new terminal:
+### 1. Start the Backend
 `cd /app/backend`
 `pip install -r requirements.txt`
 `uvicorn main:app --reload --port 8000`
+*The backend will automatically load the NLP models directly via models1.py.*
 
-### 3. Start the Frontend
+### 2. Start the Frontend
 Open another terminal:
 `cd /app/frontend`
 `npm install`
-Run the dev script (e.g. via vite directly or package json).
+`npm run dev`
 
 ### Switching Modes
 Use the toggle at the top of the app to switch between:
-- Normal Data Cleaning (no API needed)
-- Code-Mix NLP Analysis (requires unified_api.py running)
+- Normal Data Cleaning
+- Code-Mix NLP Analysis

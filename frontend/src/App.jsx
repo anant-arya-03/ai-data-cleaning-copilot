@@ -9,11 +9,11 @@ function App() {
   const [mode, setMode] = useState('normal'); // 'normal' or 'codemix'
 
   return (
-    <div className="min-h-screen bg-background text-slate-200 font-sans selection:bg-primary selection:text-white pb-20">
+    <div className="min-h-screen bg-background text-slate-800 font-sans selection:bg-primary selection:text-white pb-20">
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-md border-b border-slate-800 p-4 shadow-sm">
+      <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-md border-b border-slate-200 p-4 shadow-sm">
         <div className="max-w-6xl mx-auto flex flex-col items-center justify-center space-y-4">
-          <h1 className="text-2xl font-heading font-bold text-white tracking-tight">
+          <h1 className="text-2xl font-heading font-bold text-slate-900 tracking-tight">
             AI Data Cleaning Copilot
           </h1>
           <ModeToggle activeMode={mode} onChange={setMode} />

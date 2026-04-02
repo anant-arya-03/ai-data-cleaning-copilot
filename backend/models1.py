@@ -133,28 +133,40 @@ def load_models(
     print(f"Device: {device}")
 
     print(f"\n[1/3] Loading Misinfo model from {misinfo_dir} ...")
-    misinfo_tokenizer = AutoTokenizer.from_pretrained(misinfo_dir)
-    misinfo_model     = AutoModelForSequenceClassification.from_pretrained(misinfo_dir)
-    misinfo_model.to(device).eval()
-    print("  ✓ Misinfo model ready")
+    try:
+        misinfo_tokenizer = AutoTokenizer.from_pretrained(misinfo_dir)
+        misinfo_model     = AutoModelForSequenceClassification.from_pretrained(misinfo_dir)
+        misinfo_model.to(device).eval()
+        print("  ✓ Misinfo model ready")
+    except Exception as e:
+        print(f"  ⚠ Failed to load Misinfo model: {e}")
+        misinfo_model, misinfo_tokenizer = None, None
 
     print(f"\n[2/3] Loading Fake News model from {fakenews_dir} ...")
-    fakenews_tokenizer = AutoTokenizer.from_pretrained(fakenews_dir)
-    fakenews_model     = AutoModelForSequenceClassification.from_pretrained(fakenews_dir)
-    fakenews_model.to(device).eval()
-    print("  ✓ Fake News model ready")
+    try:
+        fakenews_tokenizer = AutoTokenizer.from_pretrained(fakenews_dir)
+        fakenews_model     = AutoModelForSequenceClassification.from_pretrained(fakenews_dir)
+        fakenews_model.to(device).eval()
+        print("  ✓ Fake News model ready")
+    except Exception as e:
+        print(f"  ⚠ Failed to load Fake News model: {e}")
+        fakenews_model, fakenews_tokenizer = None, None
 
     print(f"\n[3/3] Loading EmoSen model from {emosen_dir} ...")
-    emosen_tokenizer = AutoTokenizer.from_pretrained(emosen_dir)
-    emosen_model     = AutoModelForSequenceClassification.from_pretrained(emosen_dir)
-    emosen_model.to(device).eval()
+    try:
+        emosen_tokenizer = AutoTokenizer.from_pretrained(emosen_dir)
+        emosen_model     = AutoModelForSequenceClassification.from_pretrained(emosen_dir)
+        emosen_model.to(device).eval()
 
-    label_encoder = LabelEncoder()
-    label_encoder.classes_ = np.load(
-        os.path.join(emosen_dir, "label_classes.npy"), allow_pickle=True
-    )
-    print("  ✓ EmoSen model ready")
-    print(f"  Sentiment classes: {list(label_encoder.classes_)}\n")
+        label_encoder = LabelEncoder()
+        label_encoder.classes_ = np.load(
+            os.path.join(emosen_dir, "label_classes.npy"), allow_pickle=True
+        )
+        print("  ✓ EmoSen model ready")
+        print(f"  Sentiment classes: {list(label_encoder.classes_)}\n")
+    except Exception as e:
+        print(f"  ⚠ Failed to load EmoSen model: {e}")
+        emosen_model, emosen_tokenizer, label_encoder = None, None, None
 
     return {
         "device":   device,
@@ -187,21 +199,12 @@ def _infer(model, tokenizer, text: str, device, max_len: int = 256) -> np.ndarra
 # ═════════════════════════════════════════════════════════════
 
 def predict_misinfo(text: str, models: dict) -> dict:
-    """
-    Misinformation detection.
-
-    Returns:
-        {
-            "label":           "misinfo" | "nonmisinfo",
-            "confidence":      float (0-100),
-            "prob_misinfo":    float (0-100),
-            "prob_nonmisinfo": float (0-100),
-            "text_analysis":   dict,
-        }
-    """
     text = text.strip()
     if len(text.split()) < 3:
         return {"error": "Text too short. Please enter at least 3 words."}
+
+    if models["misinfo"]["model"] is None:
+        return {"error": "Model not loaded", "label": "unknown", "confidence": 0}
 
     cleaned = clean_news(text)
     probs   = _infer(
@@ -224,21 +227,12 @@ def predict_misinfo(text: str, models: dict) -> dict:
 
 
 def predict_fakenews(text: str, models: dict) -> dict:
-    """
-    Fake news classification (6 classes).
-
-    Returns:
-        {
-            "label":      str,   # e.g. "fake", "true", "misleading", …
-            "emoji":      str,
-            "confidence": float (0-100),
-            "all_scores": dict,  # {label: score, …}
-            "text_analysis": dict,
-        }
-    """
     text = text.strip()
     if len(text.split()) < 3:
         return {"error": "Text too short. Please enter at least 3 words."}
+
+    if models["fakenews"]["model"] is None:
+        return {"error": "Model not loaded", "label": "unknown", "confidence": 0, "all_scores": {}}
 
     cleaned  = clean_news(text)
     probs    = _infer(
@@ -264,21 +258,12 @@ def predict_fakenews(text: str, models: dict) -> dict:
 
 
 def predict_emosen(text: str, models: dict) -> dict:
-    """
-    Sentiment analysis for Hinglish / code-mix text.
-
-    Returns:
-        {
-            "label":      str,   # e.g. "positive", "negative", "neutral"
-            "emoji":      str,
-            "confidence": float (0-100),
-            "all_scores": dict,
-            "text_analysis": dict,
-        }
-    """
     text = text.strip()
     if len(text.split()) < 2:
         return {"error": "Text too short."}
+
+    if models["emosen"]["model"] is None:
+        return {"error": "Model not loaded", "label": "unknown", "confidence": 0, "all_scores": {}}
 
     le       = models["emosen"]["label_encoder"]
     cleaned  = clean_tweet(text)
@@ -305,17 +290,6 @@ def predict_emosen(text: str, models: dict) -> dict:
 
 
 def predict_all(text: str, models: dict) -> dict:
-    """
-    Run all 3 models on the same text in one call.
-
-    Returns:
-        {
-            "misinfo":       dict,
-            "fakenews":      dict,
-            "emosen":        dict,
-            "text_analysis": dict,
-        }
-    """
     text    = text.strip()
     results = {"text_analysis": analyse_text(text)}
 
@@ -348,39 +322,6 @@ def predict_all(text: str, models: dict) -> dict:
 # ═════════════════════════════════════════════════════════════
 
 def smart_predict(text: str, models: dict, threshold: float = CODEMIX_THRESHOLD) -> dict:
-    """
-    Automatically routes text to the correct model based on language detection.
-
-    Routing logic:
-        code_mix_ratio > threshold  OR  "Code-mix (Hinglish)" in detected languages
-            → predict_emosen()       (handles Hinglish / code-mix sentiment)
-        Otherwise
-            → predict_misinfo() + predict_fakenews()  (handles English news)
-
-    Args:
-        text      : Input string to classify.
-        models    : Dict returned by load_models().
-        threshold : code_mix_ratio cutoff for Hinglish routing. Default 0.15.
-                    Lower = catch more Hinglish. Higher = only clearly Hinglish text.
-
-    Returns (code-mix route):
-        {
-            "routed_to":     "emosen",
-            "label":         str,
-            "emoji":         str,
-            "confidence":    float,
-            "all_scores":    dict,
-            "text_analysis": dict,   # includes code_mix_ratio, languages_detected, etc.
-        }
-
-    Returns (English route):
-        {
-            "routed_to": "english",
-            "misinfo":   { ...predict_misinfo() output... },
-            "fakenews":  { ...predict_fakenews() output... },
-            "text_analysis": dict,
-        }
-    """
     text     = text.strip()
     analysis = analyse_text(text)
     langs    = analysis["languages_detected"]
@@ -414,37 +355,6 @@ def predict_batch(
     threshold: float = CODEMIX_THRESHOLD,
     verbose: bool = True,
 ) -> list:
-    """
-    Process a list of texts with auto-routing. Useful for CSV files.
-
-    Args:
-        texts     : List of strings (e.g. df["text"].tolist()).
-        models    : Dict returned by load_models().
-        threshold : Passed to smart_predict(). Default 0.15.
-        verbose   : Print progress every 10 rows. Default True.
-
-    Returns:
-        List of dicts, one per input text (same order as input).
-
-    Example:
-        import pandas as pd
-        from models import load_models, predict_batch
-
-        models  = load_models()
-        df      = pd.read_csv("data.csv")          # needs a 'text' column
-        results = predict_batch(df["text"].tolist(), models)
-
-        df["routed_to"]  = [r["routed_to"] for r in results]
-        df["label"]      = [
-            r.get("label") or r.get("misinfo", {}).get("label", "")
-            for r in results
-        ]
-        df["confidence"] = [
-            r.get("confidence") or r.get("misinfo", {}).get("confidence", "")
-            for r in results
-        ]
-        df.to_csv("results.csv", index=False)
-    """
     results = []
     total   = len(texts)
 
@@ -455,16 +365,6 @@ def predict_batch(
             results.append(smart_predict(str(text), models, threshold=threshold))
         except Exception as e:
             results.append({"error": str(e), "routed_to": None, "input": text})
-
-    if verbose:
-        routed_emosen  = sum(1 for r in results if r.get("routed_to") == "emosen")
-        routed_english = sum(1 for r in results if r.get("routed_to") == "english")
-        errors         = sum(1 for r in results if "error" in r)
-        print(f"\n  Done. {total} texts processed.")
-        print(f"  → EmoSen (Hinglish) : {routed_emosen}")
-        print(f"  → English models    : {routed_english}")
-        if errors:
-            print(f"  ⚠ Errors           : {errors}")
 
     return results
 

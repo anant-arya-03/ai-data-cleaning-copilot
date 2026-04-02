@@ -1,53 +1,52 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { cn } from '../utils';
-import { Sparkles, Globe } from 'lucide-react';
+import { Leaf, Globe } from 'lucide-react';
 
 export default function ModeToggle({ activeMode, onChange }) {
   return (
-    <div className="flex flex-col items-center space-y-2">
-      <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-700 shadow-inner relative">
+    <div className="flex flex-col items-center space-y-2 mb-6">
+      <div className="flex items-center bg-slate-100 p-1 rounded-full border border-slate-200 shadow-inner relative">
         {/* Animated background pill */}
         <motion.div
-          className="absolute h-full rounded-lg bg-slate-800"
-          layoutId="activeTabPill"
+          className="absolute h-full rounded-full bg-white shadow-md border border-slate-200"
+          layoutId="activeTabPillLight"
           initial={false}
           animate={{
             x: activeMode === 'normal' ? 0 : '100%',
-            backgroundColor: activeMode === 'normal' ? '#0ea5e9' : '#4f46e5',
             width: '50%'
           }}
-          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+          transition={{ type: "spring", stiffness: 350, damping: 30 }}
           style={{ originX: 0 }}
         />
 
         <button
           onClick={() => onChange('normal')}
           className={cn(
-            "relative flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-colors w-64 z-10",
-            activeMode === 'normal' ? "text-white" : "text-slate-400 hover:text-slate-200"
+            "relative flex items-center justify-center space-x-2 px-8 py-2.5 rounded-full font-medium transition-colors w-56 z-10 text-sm",
+            activeMode === 'normal' ? "text-primary font-bold" : "text-slate-500 hover:text-slate-700"
           )}
         >
-          <Sparkles className="w-5 h-5" />
-          <span>Normal Data Cleaning</span>
+          <Leaf className="w-4 h-4" />
+          <span>Data Cleaning</span>
         </button>
 
         <button
           onClick={() => onChange('codemix')}
           className={cn(
-            "relative flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-colors w-64 z-10",
-            activeMode === 'codemix' ? "text-white" : "text-slate-400 hover:text-slate-200"
+            "relative flex items-center justify-center space-x-2 px-8 py-2.5 rounded-full font-medium transition-colors w-56 z-10 text-sm",
+            activeMode === 'codemix' ? "text-primary font-bold" : "text-slate-500 hover:text-slate-700"
           )}
         >
-          <Globe className="w-5 h-5" />
-          <span>Code-Mix NLP Analysis</span>
+          <Globe className="w-4 h-4" />
+          <span>Code-Mix NLP</span>
         </button>
       </div>
 
-      <p className="text-sm text-slate-400 h-5 transition-opacity duration-300">
+      <p className="text-sm text-slate-500 h-5 transition-opacity duration-300">
         {activeMode === 'normal'
-          ? "Advanced CSV data cleaning with automated type detection and transformations."
-          : "Upload a CSV with text columns and run NLP analysis using pre-trained models."}
+          ? "Powered by AI Data Cleaning Copilot. Clean, transform, and export."
+          : "Powered by custom Code-Mix models. Auto-route classification & sentiment."}
       </p>
     </div>
   );

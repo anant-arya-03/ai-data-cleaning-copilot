@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import axios from 'axios';
-import { ChevronRight, Settings, AlertTriangle, CheckCircle, Database } from 'lucide-react';
+import { Settings, AlertTriangle, CheckCircle, Database } from 'lucide-react';
+import { cn } from '../../utils';
 
 const ALLOWED_STRATEGIES = {
   numeric: ['mean', 'median', 'mode', 'fixed', 'drop', 'interpolate', 'ffill', 'bfill'],
@@ -25,7 +26,7 @@ const STRATEGY_LABELS = {
   bfill: "Backward Fill"
 };
 
-export default function Step3MissingValues({ apiUrl, onContinue, colTypes, profileData, setProfileData }) {
+export default function Step3MissingValues({ apiUrl, colTypes, profileData, setProfileData, onRefreshPreview }) {
   const [selectedCol, setSelectedCol] = useState('');
   const [strategy, setStrategy] = useState('');
   const [fixedValue, setFixedValue] = useState('');
@@ -43,7 +44,6 @@ export default function Step3MissingValues({ apiUrl, onContinue, colTypes, profi
 
   const availableStrategies = useMemo(() => {
     if (!activeColType) return [];
-    // Fallback to text strategies if type is unknown
     return ALLOWED_STRATEGIES[activeColType] || ALLOWED_STRATEGIES['text'];
   }, [activeColType]);
 
@@ -70,14 +70,13 @@ export default function Step3MissingValues({ apiUrl, onContinue, colTypes, profi
         ...res.data
       });
 
-      // Reset selections
       setSelectedCol('');
       setStrategy('');
       setFixedValue('');
 
-      // Refresh profile to update remaining missing counts
       const profRes = await axios.get(`${apiUrl}/profile`);
       setProfileData(profRes.data);
+      onRefreshPreview(); // Refresh the main table
 
     } catch (err) {
       setError(err.response?.data?.detail || "Failed to apply strategy");
@@ -87,155 +86,116 @@ export default function Step3MissingValues({ apiUrl, onContinue, colTypes, profi
   };
 
   return (
-    <div className="bg-surface rounded-xl border border-slate-700 p-6 shadow-xl">
-      <div className="flex items-center justify-between mb-6">
-        <h3 className="text-xl font-bold flex items-center">
-          <span className="bg-primary text-white w-8 h-8 rounded-full flex items-center justify-center mr-3">3</span>
-          Fix Missing Values
-        </h3>
-        <button
-          onClick={onContinue}
-          className="flex items-center bg-primary hover:bg-primaryHover text-white px-5 py-2 rounded-lg font-medium transition-colors"
-        >
-          Continue to FlashFill <ChevronRight className="w-4 h-4 ml-1" />
-        </button>
+    <div className="space-y-6">
+      <div className="card-panel">
+         <h3 className="card-title text-slate-800">
+           <Database className="w-5 h-5 mr-2 text-indigo-500" />
+           Columns Needing Attention
+         </h3>
+
+         {missingColumns.length === 0 ? (
+           <div className="text-center py-8 text-emerald-600 bg-emerald-50 rounded-lg border border-emerald-200 shadow-sm">
+             <CheckCircle className="w-8 h-8 mx-auto mb-2 text-emerald-500" />
+             <p className="font-bold">All clean!</p>
+             <p className="text-sm">No missing values found in the dataset.</p>
+           </div>
+         ) : (
+           <div className="space-y-2">
+             {missingColumns.map(c => (
+               <div
+                 key={c.name}
+                 onClick={() => { setSelectedCol(c.name); setStrategy(''); setResult(null); setError(''); }}
+                 className={cn("p-3 rounded-lg border cursor-pointer transition shadow-sm", selectedCol === c.name ? "bg-indigo-50 border-indigo-300 ring-1 ring-indigo-500" : "bg-white border-slate-200 hover:border-indigo-400 hover:shadow-md")}
+               >
+                 <div className="flex justify-between items-center mb-1">
+                   <span className={cn("font-bold truncate mr-2", selectedCol === c.name ? "text-indigo-700" : "text-slate-700")}>{c.name}</span>
+                   <span className="text-[10px] px-2 py-0.5 bg-slate-100 rounded-full font-bold uppercase text-slate-500">{colTypes[c.name]?.type || 'unknown'}</span>
+                 </div>
+                 <div className="text-sm font-medium text-rose-500 bg-rose-50 inline-block px-2 rounded">
+                   {c.missing_count.toLocaleString()} NULL ({c.missing_percent.toFixed(1)}%)
+                 </div>
+               </div>
+             ))}
+           </div>
+         )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Left Col: Missing Summary */}
-        <div className="col-span-1 bg-slate-800/30 border border-slate-700 p-4 rounded-lg">
-          <h4 className="font-bold text-slate-300 mb-4 flex items-center">
-            <Database className="w-4 h-4 mr-2" /> Columns needing attention
-          </h4>
+      {selectedCol && (
+        <div className="card-panel animate-in fade-in slide-in-from-bottom-2">
+           <h3 className="card-title text-slate-800">
+             <Settings className="w-5 h-5 mr-2 text-indigo-500" />
+             Apply Strategy
+           </h3>
 
-          {missingColumns.length === 0 ? (
-            <div className="text-center py-8 text-success bg-success/10 rounded-lg border border-success/20">
-              <CheckCircle className="w-8 h-8 mx-auto mb-2" />
-              <p className="font-medium">All clean!</p>
-              <p className="text-sm">No missing values found in the dataset.</p>
-            </div>
-          ) : (
-            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
-              {missingColumns.map(c => (
-                <div
-                  key={c.name}
-                  onClick={() => { setSelectedCol(c.name); setStrategy(''); setResult(null); setError(''); }}
-                  className={`p-3 rounded border cursor-pointer transition ${
-                    selectedCol === c.name
-                      ? 'bg-primary/20 border-primary text-white'
-                      : 'bg-slate-800 border-slate-700 hover:border-slate-500'
-                  }`}
-                >
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="font-medium truncate mr-2">{c.name}</span>
-                    <span className="text-xs px-2 py-0.5 bg-slate-900 rounded">{colTypes[c.name]?.type || 'unknown'}</span>
-                  </div>
-                  <div className="text-sm text-rose-400">
-                    {c.missing_count.toLocaleString()} missing ({c.missing_percent.toFixed(1)}%)
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+           <div className="space-y-4">
+             <div>
+               <label className="block text-sm font-bold text-slate-600 mb-1">Strategy for {selectedCol} ({activeColType})</label>
+               <select
+                 value={strategy}
+                 onChange={(e) => setStrategy(e.target.value)}
+                 className="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm"
+               >
+                 <option value="">-- Select a strategy --</option>
+                 {availableStrategies.map(s => (
+                   <option key={s} value={s}>{STRATEGY_LABELS[s]}</option>
+                 ))}
+               </select>
+             </div>
+
+             {strategy === 'fixed' && (
+               <div>
+                 <label className="block text-sm font-bold text-slate-600 mb-1">Fixed Value</label>
+                 <input
+                   type={activeColType === 'numeric' ? 'number' : 'text'}
+                   value={fixedValue}
+                   onChange={(e) => setFixedValue(e.target.value)}
+                   placeholder="Enter value..."
+                   className="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                 />
+               </div>
+             )}
+
+             <button
+               onClick={handleApply}
+               disabled={loading || !strategy}
+               className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white py-3 rounded-lg font-bold transition shadow-sm shadow-indigo-600/30"
+             >
+               {loading ? 'Processing...' : 'Apply Strategy'}
+             </button>
+
+             {error && (
+               <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg flex items-start text-sm shadow-sm font-medium">
+                 <AlertTriangle className="w-5 h-5 mr-2 flex-shrink-0 text-rose-500" />
+                 <span>{error}</span>
+               </div>
+             )}
+           </div>
         </div>
+      )}
 
-        {/* Right Col: Controls & Results */}
-        <div className="col-span-1 md:col-span-2 space-y-4">
+      {result && (
+        <div className="card-panel bg-emerald-50 border-emerald-200 animate-in fade-in zoom-in duration-300">
+           <div className="flex items-center text-emerald-700 mb-3">
+             <CheckCircle className="w-5 h-5 mr-2" />
+             <h4 className="font-bold text-lg">Applied to {result.col}</h4>
+           </div>
 
-          <div className="bg-slate-800/50 border border-slate-700 p-5 rounded-lg">
-            <h4 className="font-bold text-slate-300 mb-4 flex items-center">
-              <Settings className="w-4 h-4 mr-2" /> Apply Strategy
-            </h4>
-
-            {!selectedCol ? (
-              <div className="text-center py-10 text-slate-400">
-                <Settings className="w-10 h-10 mx-auto mb-3 opacity-50" />
-                <p>Select a column from the left to fix missing values.</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-400 mb-1">Strategy for {selectedCol} ({activeColType})</label>
-                  <select
-                    value={strategy}
-                    onChange={(e) => setStrategy(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <option value="">-- Select a strategy --</option>
-                    {availableStrategies.map(s => (
-                      <option key={s} value={s}>{STRATEGY_LABELS[s]}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {strategy === 'fixed' && (
-                  <div>
-                    <label className="block text-sm font-medium text-slate-400 mb-1">Fixed Value</label>
-                    <input
-                      type={activeColType === 'numeric' ? 'number' : 'text'}
-                      value={fixedValue}
-                      onChange={(e) => setFixedValue(e.target.value)}
-                      placeholder="Enter value..."
-                      className="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-primary"
-                    />
-                  </div>
-                )}
-
-                <button
-                  onClick={handleApply}
-                  disabled={loading || !strategy}
-                  className="w-full bg-primary hover:bg-primaryHover disabled:opacity-50 disabled:hover:bg-primary text-white py-2 rounded-lg font-medium transition"
-                >
-                  {loading ? 'Processing...' : 'Apply Strategy'}
-                </button>
-
-                {error && (
-                  <div className="p-3 bg-danger/20 border border-danger text-danger rounded-lg flex items-start text-sm">
-                    <AlertTriangle className="w-5 h-5 mr-2 flex-shrink-0 mt-0.5" />
-                    <span>{error}</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Results Panel */}
-          {result && (
-            <div className="bg-success/10 border border-success/30 p-5 rounded-lg animate-in fade-in zoom-in duration-300">
-              <div className="flex items-center text-success mb-3">
-                <CheckCircle className="w-5 h-5 mr-2" />
-                <h4 className="font-bold">Successfully applied to {result.col}</h4>
-              </div>
-              <div className="grid grid-cols-3 gap-4 mb-4 text-center">
-                <div className="bg-slate-900/50 p-2 rounded">
-                  <div className="text-2xl font-bold text-white">{result.rows_affected}</div>
-                  <div className="text-xs text-slate-400 uppercase">Rows Updated</div>
-                </div>
-                <div className="bg-slate-900/50 p-2 rounded">
-                  <div className="text-2xl font-bold text-rose-400">{result.before}</div>
-                  <div className="text-xs text-slate-400 uppercase">Missing Before</div>
-                </div>
-                <div className="bg-slate-900/50 p-2 rounded">
-                  <div className="text-2xl font-bold text-success">{result.after}</div>
-                  <div className="text-xs text-slate-400 uppercase">Missing After</div>
-                </div>
-              </div>
-
-              <div className="text-sm">
-                <p className="font-medium text-slate-400 mb-2">Sample Preview (First 5 rows):</p>
-                <div className="flex flex-wrap gap-2">
-                   {result.preview.slice(0,5).map((row, idx) => (
-                      <span key={idx} className="bg-slate-800 px-2 py-1 rounded border border-slate-700">
-                         {String(row[result.col])}
-                      </span>
-                   ))}
-                </div>
-              </div>
-            </div>
-          )}
-
+           <div className="grid grid-cols-3 gap-3 mb-4 text-center">
+             <div className="bg-white p-3 rounded-lg border border-emerald-100 shadow-sm">
+               <div className="text-xl font-bold text-slate-700">{result.rows_affected}</div>
+               <div className="text-[10px] text-slate-500 font-bold uppercase mt-1">Updated</div>
+             </div>
+             <div className="bg-white p-3 rounded-lg border border-emerald-100 shadow-sm">
+               <div className="text-xl font-bold text-rose-500">{result.before}</div>
+               <div className="text-[10px] text-slate-500 font-bold uppercase mt-1">Before</div>
+             </div>
+             <div className="bg-white p-3 rounded-lg border border-emerald-100 shadow-sm">
+               <div className="text-xl font-bold text-emerald-600">{result.after}</div>
+               <div className="text-[10px] text-slate-500 font-bold uppercase mt-1">Remaining</div>
+             </div>
+           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

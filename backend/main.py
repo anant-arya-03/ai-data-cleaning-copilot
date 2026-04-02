@@ -9,8 +9,20 @@ import json
 from cleaner import detect_column_types, generate_profile, apply_missing_strategy
 from flashfill import get_suggestions, apply_transformation
 from anomaly import detect_anomalies, get_rename_suggestions
+from models1 import load_models, smart_predict, predict_batch, predict_misinfo, predict_fakenews, predict_emosen, predict_all, analyse_text
 
 app = FastAPI(title="AI Data Cleaning Copilot Backend")
+
+# Initialize models at startup
+app.state.nlp_models = None
+
+@app.on_event("startup")
+def startup_event():
+    # Attempt to load models, but don't crash if paths don't exist yet
+    try:
+        app.state.nlp_models = load_models()
+    except Exception as e:
+        print(f"Warning: Could not initialize all NLP models on startup: {e}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,9 +66,45 @@ class AnomalyActionRequest(BaseModel):
 class RenameApplyRequest(BaseModel):
     renames: Dict[str, str] # {original: new_name}
 
+class NlpRequest(BaseModel):
+    text: str
+
+class NlpBatchRequest(BaseModel):
+    texts: List[str]
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+@app.get("/nlp/health")
+def nlp_health():
+    if app.state.nlp_models is None:
+         return {"status": "offline", "message": "Models not loaded"}
+    return {"status": "online"}
+
+@app.post("/nlp/predict/{model_type}")
+def nlp_predict(model_type: str, req: NlpRequest):
+    if app.state.nlp_models is None:
+        # Load them on demand if failed on startup
+        app.state.nlp_models = load_models()
+
+    text = req.text
+    models = app.state.nlp_models
+
+    if model_type == "misinfo":
+        return predict_misinfo(text, models)
+    elif model_type == "fakenews":
+        return predict_fakenews(text, models)
+    elif model_type == "emosen":
+        return predict_emosen(text, models)
+    elif model_type == "all":
+        return predict_all(text, models)
+    elif model_type == "smart":
+        return smart_predict(text, models)
+    elif model_type == "text":
+        return {"text_analysis": analyse_text(text)}
+    else:
+        raise HTTPException(status_code=400, detail="Unknown model type")
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
