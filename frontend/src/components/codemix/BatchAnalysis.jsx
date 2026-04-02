@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Upload, FileText, CheckCircle, Play, Loader2, Download, Table, Code, Type, LayoutList, Layers } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
+import { API_URL } from '../../config';
 
 export default function BatchAnalysis() {
   const [file, setFile] = useState(null);
@@ -89,7 +90,7 @@ export default function BatchAnalysis() {
     formData.append("text_column", selectedCol);
 
     try {
-        const response = await fetch("http://localhost:8000/nlp/batch_file", {
+        const response = await fetch(`${API_URL}/nlp/batch_file`, {
             method: 'POST',
             body: formData,
         });

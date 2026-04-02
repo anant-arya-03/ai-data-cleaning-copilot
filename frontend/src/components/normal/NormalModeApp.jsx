@@ -8,8 +8,7 @@ import Step3MissingValues from './Step3MissingValues';
 import Step4FlashFill from './Step4FlashFill';
 import Step5Anomalies from './Step5Anomalies';
 import Step6Export from './Step6Export';
-
-const API_URL = 'http://localhost:8000';
+import { API_URL } from '../../config';
 
 export default function NormalModeApp() {
   const [datasetInfo, setDatasetInfo] = useState(null);

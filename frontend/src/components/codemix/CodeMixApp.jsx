@@ -4,8 +4,7 @@ import { Activity, ServerCrash, Globe } from 'lucide-react';
 import SingleTextAnalysis from './SingleTextAnalysis';
 import BatchAnalysis from './BatchAnalysis';
 import { cn } from '../../utils';
-
-const NLP_API_URL = 'http://localhost:8000/nlp';
+import { NLP_API_URL, API_URL } from '../../config';
 
 export default function CodeMixApp() {
   const [apiStatus, setApiStatus] = useState('checking'); // checking, online, offline
@@ -77,7 +76,7 @@ export default function CodeMixApp() {
         {activeTab === 'single' ? (
           <SingleTextAnalysis apiUrl={NLP_API_URL} />
         ) : (
-          <BatchAnalysis apiUrl={NLP_API_URL} backendUrl="http://localhost:8000" />
+            <BatchAnalysis />
         )}
       </div>
     </div>
