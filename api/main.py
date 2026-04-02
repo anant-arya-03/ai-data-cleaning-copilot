@@ -138,11 +138,55 @@ async def nlp_batch_file(
         texts = df[column].astype(str).tolist()
 
         # Batch predict
-        results = predict_batch(texts, model_type, app.state.nlp_models)
+        results = []
+        for text in texts:
+            if model_type == "misinfo":
+                res = predict_misinfo(text, app.state.nlp_models)
+            elif model_type == "fakenews":
+                res = predict_fakenews(text, app.state.nlp_models)
+            elif model_type == "emosen":
+                res = predict_emosen(text, app.state.nlp_models)
+            elif model_type == "all":
+                res = predict_all(text, app.state.nlp_models)
+            elif model_type == "text":
+                res = {"text_analysis": analyse_text(text)}
+            else:
+                res = smart_predict(text, app.state.nlp_models)
+            results.append(res)
 
-        # Return a structure that the frontend expects
-        # The frontend seems to expect a list of JSON objects where each object is a row of the output
-        return {"results": results}
+        # Append results to the original dataframe
+        for i, res in enumerate(results):
+            df.at[i, 'full_analysis'] = json.dumps(res)
+
+            if "model_results" in res:
+                if "misinfo" in res["model_results"]:
+                    df.at[i, 'misinfo_label'] = res["model_results"]["misinfo"].get("label", "")
+                    df.at[i, 'misinfo_confidence'] = res["model_results"]["misinfo"].get("confidence", 0)
+                if "fakenews" in res["model_results"]:
+                    df.at[i, 'fakenews_label'] = res["model_results"]["fakenews"].get("label", "")
+                    df.at[i, 'fakenews_confidence'] = res["model_results"]["fakenews"].get("confidence", 0)
+                if "emosen" in res["model_results"]:
+                    df.at[i, 'emosen_label'] = res["model_results"]["emosen"].get("label", "")
+                    df.at[i, 'emosen_confidence'] = res["model_results"]["emosen"].get("confidence", 0)
+            elif "label" in res:
+                df.at[i, 'label'] = res.get("label", "")
+                df.at[i, 'confidence'] = res.get("confidence", 0)
+
+            if "text_analysis" in res:
+                df.at[i, 'languages'] = ", ".join(res["text_analysis"].get("languages_detected", []))
+                df.at[i, 'code_mix_ratio'] = res["text_analysis"].get("code_mix_ratio", 0)
+                slang = res["text_analysis"].get("slang_analysis", {})
+                df.at[i, 'slang_count'] = slang.get("slang_count", 0)
+                emojis = slang.get("emojis_present", [])
+                df.at[i, 'emojis'] = "".join(emojis) if emojis else ""
+
+        # Return the augmented dataframe and the raw results
+        df_dict = df.fillna("").to_dict(orient="records")
+        return {
+            "results": results,
+            "data": df_dict,
+            "columns": list(df.columns)
+        }
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -83,7 +83,10 @@ const BatchAnalysis = () => {
 
       setProgress(90);
       const data = await response.json();
-      setResults(data.results);
+
+      // We expect the backend to return { results: [...], data: [...] }
+      // where 'data' is the original CSV augmented with the new columns
+      setResults(data.data || []);
       setProgress(100);
 
     } catch (err) {
@@ -97,43 +100,8 @@ const BatchAnalysis = () => {
   const exportResults = (format) => {
     if (!results || results.length === 0) return;
 
-    // We need to fetch the original file data again and append the results
-    // For simplicity, we can just export the results themselves if they contain the original text
-    // The backend `predict_batch` might not return the original text, let's assume we export results
-
-    // Flatten the results structure for easy CSV/Excel export
-    const flattenedResults = results.map((res, index) => {
-      const flat = { _row_index: index + 1 };
-
-      if (res.model_results) {
-         if (res.model_results.misinfo) {
-             flat.misinfo_label = res.model_results.misinfo.label;
-             flat.misinfo_confidence = res.model_results.misinfo.confidence;
-         }
-         if (res.model_results.fakenews) {
-             flat.fakenews_label = res.model_results.fakenews.label;
-             flat.fakenews_confidence = res.model_results.fakenews.confidence;
-         }
-         if (res.model_results.emosen) {
-             flat.emosen_label = res.model_results.emosen.label;
-             flat.emosen_confidence = res.model_results.emosen.confidence;
-         }
-      } else if (res.label) {
-          flat.label = res.label;
-          flat.confidence = res.confidence;
-      }
-
-      if (res.text_analysis) {
-          flat.languages = res.text_analysis.languages_detected?.join(', ');
-          flat.code_mix_ratio = res.text_analysis.code_mix_ratio;
-          flat.slang_count = res.text_analysis.slang_analysis?.slang_count;
-      }
-
-      return flat;
-    });
-
     if (format === 'csv') {
-      const csv = Papa.unparse(flattenedResults);
+      const csv = Papa.unparse(results);
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -276,11 +244,36 @@ const BatchAnalysis = () => {
             <p className="text-sm mt-1 text-green-700">Click the export buttons above to download the detailed results appended to your data.</p>
           </div>
 
-          <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
-             <h4 className="font-semibold text-slate-700 mb-2">Preview of First Row Result:</h4>
-             <pre className="bg-slate-800 text-slate-100 p-4 rounded text-xs overflow-auto max-h-60">
-                 {JSON.stringify(results[0], null, 2)}
-             </pre>
+          <div className="bg-white rounded-lg border border-slate-200 overflow-hidden shadow-sm">
+             <div className="overflow-x-auto">
+               <table className="min-w-full divide-y divide-slate-200">
+                 <thead className="bg-slate-50">
+                   <tr>
+                     {Object.keys(results[0]).slice(0, 8).map(key => (
+                       <th key={key} className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider whitespace-nowrap">
+                         {key}
+                       </th>
+                     ))}
+                   </tr>
+                 </thead>
+                 <tbody className="bg-white divide-y divide-slate-200">
+                   {results.slice(0, 10).map((row, i) => (
+                     <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                       {Object.keys(results[0]).slice(0, 8).map(key => (
+                         <td key={key} className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap max-w-[200px] truncate">
+                           {typeof row[key] === 'object' ? JSON.stringify(row[key]) : String(row[key])}
+                         </td>
+                       ))}
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
+             </div>
+             {results.length > 10 && (
+                <div className="p-3 border-t border-slate-200 bg-slate-50 text-center text-sm text-slate-500">
+                  Showing first 10 rows. Export to see all {results.length} rows.
+                </div>
+             )}
           </div>
         </div>
       )}
