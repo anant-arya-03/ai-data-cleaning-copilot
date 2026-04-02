@@ -76,6 +76,8 @@ class NlpRequest(BaseModel):
 
 class NlpBatchRequest(BaseModel):
     texts: List[str]
+    model_type: str
+    column: str
 
 @router.get("/health")
 def health_check():
@@ -110,6 +112,40 @@ def nlp_predict(model_type: str, req: NlpRequest):
         return {"text_analysis": analyse_text(text)}
     else:
         raise HTTPException(status_code=400, detail="Unknown model type")
+
+@router.post("/nlp/batch_file")
+async def nlp_batch_file(
+    file: UploadFile = File(...),
+    model_type: str = Form(...),
+    column: str = Form(...)
+):
+    if app.state.nlp_models is None:
+        app.state.nlp_models = load_models()
+
+    if not file.filename.endswith(('.csv', '.xlsx')):
+        raise HTTPException(status_code=400, detail="Only CSV or Excel files are accepted")
+
+    content = await file.read()
+    try:
+        if file.filename.endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(content))
+        else:
+            df = pd.read_excel(io.BytesIO(content))
+
+        if column not in df.columns:
+            raise HTTPException(status_code=400, detail=f"Column '{column}' not found in file")
+
+        texts = df[column].astype(str).tolist()
+
+        # Batch predict
+        results = predict_batch(texts, model_type, app.state.nlp_models)
+
+        # Return a structure that the frontend expects
+        # The frontend seems to expect a list of JSON objects where each object is a row of the output
+        return {"results": results}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):

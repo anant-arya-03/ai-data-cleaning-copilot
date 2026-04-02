@@ -1,561 +1,291 @@
-import React, { useState, useRef } from 'react';
-import { Upload, FileText, CheckCircle, Play, Loader2, Download, Table, Code, Type, LayoutList, Layers } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import React, { useState } from 'react';
 import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 import { API_URL } from '../../config';
 
-export default function BatchAnalysis() {
+const BatchAnalysis = () => {
   const [file, setFile] = useState(null);
-  const [data, setData] = useState(null);
   const [columns, setColumns] = useState([]);
-  const [selectedCol, setSelectedCol] = useState("");
-  const [processing, setProcessing] = useState(false);
+  const [selectedColumn, setSelectedColumn] = useState('');
+  const [modelType, setModelType] = useState('smart');
+  const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [processedData, setProcessedData] = useState(null);
-  const [activeRowIdx, setActiveRowIdx] = useState(null);
-  const [activeTab, setActiveTab] = useState('model');
-  const fileInputRef = useRef(null);
+  const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
 
   const handleFileUpload = (e) => {
-    const uploadedFile = e.target.files?.[0];
+    const uploadedFile = e.target.files[0];
     if (!uploadedFile) return;
 
     setFile(uploadedFile);
     setError(null);
-    setProcessedData(null);
-    setActiveRowIdx(null);
+    setResults(null);
 
-    // Fast preview using PapaParse for CSV, fallback to basic preview
+    // Parse headers to let user select the text column
     if (uploadedFile.name.endsWith('.csv')) {
       Papa.parse(uploadedFile, {
         header: true,
-        preview: 10,
-        skipEmptyLines: true,
+        preview: 1, // just need headers
         complete: (results) => {
-          if (results.data.length > 0) {
-            setData(results.data);
-            const cols = Object.keys(results.data[0]);
-            setColumns(cols);
-
-            // Auto-detect text column
-            const textCol = cols.find(key => {
-               const val = results.data[0][key];
-               return typeof val === 'string' && val.length > 10;
-            });
-            if (textCol) setSelectedCol(textCol);
-            else setSelectedCol(cols[0]);
-          } else {
-             setError("CSV file is empty");
+          if (results.meta && results.meta.fields) {
+            setColumns(results.meta.fields);
+            setSelectedColumn(results.meta.fields[0]);
           }
         },
-        error: (err) => setError(err.message)
-      });
-    } else {
-        // Just show filename for excel, we will parse fully on backend
-        setData([{preview: "Excel file selected. Preview not available.", rows: "?"}]);
-        setColumns(["Upload ready"]);
-        setSelectedCol("");
-    }
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      fileInputRef.current.files = e.dataTransfer.files;
-      handleFileUpload({ target: { files: e.dataTransfer.files } });
-    }
-  };
-
-  const runBatch = async () => {
-    if (!file || !selectedCol) return;
-    if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
-        // If it's excel, we need the user to type the column name if we couldn't parse headers
-        if (!selectedCol) {
-            setError("Please type the name of the column to analyze");
-            return;
+        error: (err) => {
+          setError('Failed to parse CSV headers: ' + err.message);
         }
+      });
+    } else if (uploadedFile.name.endsWith('.xlsx')) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, {type: 'array'});
+            const firstSheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[firstSheetName];
+            const header = XLSX.utils.sheet_to_json(worksheet, {header: 1})[0];
+            if (header) {
+                setColumns(header);
+                setSelectedColumn(header[0]);
+            }
+        };
+        reader.readAsArrayBuffer(uploadedFile);
+    } else {
+        setError("Unsupported file format. Please upload a CSV or Excel file.");
+    }
+  };
+
+  const runAnalysis = async () => {
+    if (!file || !selectedColumn) {
+      setError('Please upload a file and select a column to analyze.');
+      return;
     }
 
-    setProcessing(true);
-    setProgress(10);
+    setLoading(true);
     setError(null);
+    setProgress(10); // Start progress
 
     const formData = new FormData();
-    formData.append("file", file);
-    formData.append("text_column", selectedCol);
+    formData.append('file', file);
+    formData.append('model_type', modelType);
+    formData.append('column', selectedColumn);
 
     try {
-        const response = await fetch(`${API_URL}/nlp/batch_file`, {
-            method: 'POST',
-            body: formData,
-        });
+      const response = await fetch(`${API_URL}/nlp/batch_file`, {
+        method: 'POST',
+        body: formData,
+      });
 
-        setProgress(80);
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.detail || 'Analysis failed');
+      }
 
-        if (!response.ok) {
-            const errData = await response.json();
-            throw new Error(errData.detail || "Analysis failed");
-        }
-
-        const result = await response.json();
-
-        // Convert full_analysis string back to object for UI
-        const parsedData = result.data.map(row => {
-            if (typeof row.full_analysis === 'string') {
-                try {
-                    row.full_analysis = JSON.parse(row.full_analysis);
-                } catch(e) {
-                    row.full_analysis = {};
-                }
-            }
-            return row;
-        });
-
-        setProcessedData(parsedData);
-        setProgress(100);
-
-        // Auto-select first row
-        if (parsedData.length > 0) {
-            setActiveRowIdx(0);
-        }
+      setProgress(90);
+      const data = await response.json();
+      setResults(data.results);
+      setProgress(100);
 
     } catch (err) {
-        setError(err.message);
+      setError(err.message);
+      setProgress(0);
     } finally {
-        setProcessing(false);
+      setLoading(false);
     }
   };
 
-  const downloadResults = (format) => {
-    if (!processedData) return;
+  const exportResults = (format) => {
+    if (!results || results.length === 0) return;
 
-    // Omit the giant JSON column for CSV/Excel export
-    const exportData = processedData.map(({ full_analysis, ...rest }) => rest);
+    // We need to fetch the original file data again and append the results
+    // For simplicity, we can just export the results themselves if they contain the original text
+    // The backend `predict_batch` might not return the original text, let's assume we export results
+
+    // Flatten the results structure for easy CSV/Excel export
+    const flattenedResults = results.map((res, index) => {
+      const flat = { _row_index: index + 1 };
+
+      if (res.model_results) {
+         if (res.model_results.misinfo) {
+             flat.misinfo_label = res.model_results.misinfo.label;
+             flat.misinfo_confidence = res.model_results.misinfo.confidence;
+         }
+         if (res.model_results.fakenews) {
+             flat.fakenews_label = res.model_results.fakenews.label;
+             flat.fakenews_confidence = res.model_results.fakenews.confidence;
+         }
+         if (res.model_results.emosen) {
+             flat.emosen_label = res.model_results.emosen.label;
+             flat.emosen_confidence = res.model_results.emosen.confidence;
+         }
+      } else if (res.label) {
+          flat.label = res.label;
+          flat.confidence = res.confidence;
+      }
+
+      if (res.text_analysis) {
+          flat.languages = res.text_analysis.languages_detected?.join(', ');
+          flat.code_mix_ratio = res.text_analysis.code_mix_ratio;
+          flat.slang_count = res.text_analysis.slang_analysis?.slang_count;
+      }
+
+      return flat;
+    });
 
     if (format === 'csv') {
-      const csv = Papa.unparse(exportData);
+      const csv = Papa.unparse(flattenedResults);
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `batch_results_${Date.now()}.csv`;
+      link.href = url;
+      link.setAttribute('download', `nlp_analysis_results.csv`);
+      document.body.appendChild(link);
       link.click();
-    } else if (format === 'excel') {
-      const ws = XLSX.utils.json_to_sheet(exportData);
+      document.body.removeChild(link);
+    } else {
+      const ws = XLSX.utils.json_to_sheet(flattenedResults);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Results");
-      XLSX.writeFile(wb, `batch_results_${Date.now()}.xlsx`);
-    }
-  };
-
-  const getActiveRowJson = () => {
-    if (activeRowIdx === null || !processedData || !processedData[activeRowIdx]) return null;
-    return processedData[activeRowIdx].full_analysis || {};
-  };
-
-  const renderTabContent = (json) => {
-    if (!json || Object.keys(json).length === 0) return <div className="text-slate-400 p-4">No data available for this row.</div>;
-
-    switch (activeTab) {
-        case 'model':
-            const allScores = json.all_scores || {};
-            return (
-                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <div className="flex gap-4 mb-6">
-                        <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg flex-1 shadow-sm">
-                            <div className="text-slate-500 text-sm mb-1 font-semibold uppercase tracking-wider">Label</div>
-                            <div className="text-2xl font-black text-slate-800 flex items-center capitalize">
-                                {json.label || "N/A"} {json.emoji && <span className="ml-2 text-3xl">{json.emoji}</span>}
-                            </div>
-                        </div>
-                        <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg flex-1 shadow-sm">
-                            <div className="text-slate-500 text-sm mb-1 font-semibold uppercase tracking-wider">Confidence</div>
-                            <div className="text-2xl font-black text-slate-800">
-                                {json.confidence ? `${json.confidence.toFixed(2)}%` : "N/A"}
-                            </div>
-                        </div>
-                    </div>
-                    {Object.keys(allScores).length > 0 && (
-                        <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
-                            <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">All Scores</div>
-                            {Object.entries(allScores).map(([key, val]) => (
-                                <div key={key} className="flex items-center justify-between mb-3 last:mb-0 bg-slate-50 p-2 rounded">
-                                    <span className="text-slate-700 font-medium capitalize">{key}</span>
-                                    <span className="text-indigo-600 font-mono font-bold">{val}%</span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            );
-        case 'scripts':
-            const analysis = json.text_analysis || {};
-            return (
-                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
-                        <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">Scripts Detected</div>
-                        <div className="flex flex-wrap gap-2">
-                            {analysis.scripts_detected?.map((s, i) => (
-                                <span key={i} className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-full text-sm font-bold shadow-sm">{s}</span>
-                            )) || <span className="text-slate-400 italic">None</span>}
-                        </div>
-                    </div>
-                    <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
-                        <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">Languages Detected</div>
-                        <div className="flex flex-wrap gap-2">
-                            {analysis.languages_detected?.map((l, i) => (
-                                <span key={i} className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-full text-sm font-bold shadow-sm">{l}</span>
-                            )) || <span className="text-slate-400 italic">None</span>}
-                        </div>
-                    </div>
-                    <div className="bg-white border border-slate-200 p-5 rounded-lg flex items-center justify-between shadow-sm">
-                        <div className="text-slate-500 text-sm font-semibold uppercase tracking-wider">Code-Mix Ratio</div>
-                        <div className="text-2xl font-black text-indigo-600 bg-indigo-50 px-4 py-1 rounded-lg border border-indigo-100">{analysis.code_mix_ratio || 0}</div>
-                    </div>
-                </div>
-            );
-        case 'slang':
-            const slang = json.slang_analysis || {};
-            return (
-                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
-                        <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">Internet Slang</div>
-                        <div className="flex flex-wrap gap-2">
-                            {slang.internet_slang?.length > 0 ? slang.internet_slang.map((s, i) => (
-                                <span key={i} className="bg-blue-50 text-blue-700 border border-blue-200 px-3 py-1.5 rounded-lg text-sm font-mono font-bold shadow-sm">{s}</span>
-                            )) : <span className="text-slate-400 text-sm italic">None</span>}
-                        </div>
-                    </div>
-                    <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
-                        <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">Hinglish Slang</div>
-                        <div className="flex flex-wrap gap-2">
-                            {slang.hinglish_slang?.length > 0 ? slang.hinglish_slang.map((s, i) => (
-                                <span key={i} className="bg-orange-50 text-orange-700 border border-orange-200 px-3 py-1.5 rounded-lg text-sm font-mono font-bold shadow-sm">{s}</span>
-                            )) : <span className="text-slate-400 text-sm italic">None</span>}
-                        </div>
-                    </div>
-                    <div className="bg-white border border-slate-200 p-4 rounded-lg shadow-sm">
-                        <div className="text-slate-500 text-sm mb-3 font-semibold uppercase tracking-wider">Abbreviations</div>
-                        <div className="flex flex-wrap gap-2">
-                            {slang.abbreviations?.length > 0 ? slang.abbreviations.map((s, i) => (
-                                <span key={i} className="bg-slate-100 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-lg text-sm font-mono font-bold shadow-sm">{s}</span>
-                            )) : <span className="text-slate-400 text-sm italic">None</span>}
-                        </div>
-                    </div>
-                    <div className="flex gap-4">
-                        <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg flex-1 shadow-sm">
-                            <div className="text-slate-500 text-sm mb-1 font-semibold uppercase tracking-wider">Total Slangs</div>
-                            <div className="text-2xl font-black text-slate-800">{slang.slang_count || 0}</div>
-                        </div>
-                        <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg flex-1 shadow-sm">
-                            <div className="text-slate-500 text-sm mb-1 font-semibold uppercase tracking-wider">Emojis Present</div>
-                            <div className="text-2xl font-black text-slate-800 tracking-widest">
-                                {slang.emojis_present?.join(' ') || "None"}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            );
-        case 'phonemes':
-            const phones = json.phoneme_hints || [];
-            return (
-                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    {phones.length > 0 ? phones.map((p, i) => (
-                        <div key={i} className="bg-white border border-slate-200 p-5 rounded-lg shadow-sm">
-                            <div className="text-indigo-600 font-black mb-3 text-lg border-b border-slate-100 pb-2">{p.pattern}</div>
-                            <div className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-2">Examples</div>
-                            <div className="flex gap-2">
-                               {p.examples?.map((ex, idx) => (
-                                  <span key={idx} className="bg-slate-50 border border-slate-200 px-3 py-1 rounded text-slate-700 font-mono font-medium">{ex}</span>
-                               ))}
-                            </div>
-                        </div>
-                    )) : <div className="text-slate-400 bg-white p-6 text-center border border-slate-200 rounded-lg">No specific phoneme patterns detected.</div>}
-                </div>
-            );
-        case 'stats':
-            const stats = json.text_stats || {};
-            return (
-                <div className="grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <div className="bg-white border border-slate-200 p-5 rounded-lg shadow-sm flex flex-col items-center justify-center text-center">
-                        <div className="text-slate-400 text-xs mb-1 font-bold uppercase tracking-wider">Word Count</div>
-                        <div className="text-3xl font-black text-indigo-600">{stats.word_count || 0}</div>
-                    </div>
-                    <div className="bg-white border border-slate-200 p-5 rounded-lg shadow-sm flex flex-col items-center justify-center text-center">
-                        <div className="text-slate-400 text-xs mb-1 font-bold uppercase tracking-wider">Char Count</div>
-                        <div className="text-3xl font-black text-emerald-600">{stats.char_count || 0}</div>
-                    </div>
-                    <div className="bg-white border border-slate-200 p-5 rounded-lg shadow-sm flex flex-col items-center justify-center text-center">
-                        <div className="text-slate-400 text-xs mb-1 font-bold uppercase tracking-wider">Avg Word Length</div>
-                        <div className="text-3xl font-black text-blue-600">{stats.avg_word_length || 0}</div>
-                    </div>
-                    <div className="bg-white border border-slate-200 p-5 rounded-lg shadow-sm flex flex-col items-center justify-center text-center">
-                        <div className="text-slate-400 text-xs mb-1 font-bold uppercase tracking-wider">Hashtags</div>
-                        <div className="text-3xl font-black text-orange-500">{stats.hashtags?.length || 0}</div>
-                    </div>
-                </div>
-            );
-        default:
-            return null;
+      XLSX.writeFile(wb, `nlp_analysis_results.xlsx`);
     }
   };
 
   return (
-    <div className="flex flex-col lg:flex-row gap-6 h-[calc(100vh-160px)]">
-      {/* Left Pane - Table & Controls (Light Theme) */}
-      <div className="w-full lg:w-1/2 flex flex-col bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden relative">
-         <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center z-10">
-            <h2 className="font-bold text-slate-800 text-lg flex items-center">
-                <Table className="w-5 h-5 mr-2 text-indigo-500" />
-                Batch Data
-            </h2>
-            {processedData && (
-                <div className="flex gap-2">
-                    <button onClick={() => downloadResults('csv')} className="text-xs bg-white border border-slate-300 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-50 font-bold transition flex items-center shadow-sm">
-                        <Download className="w-3 h-3 mr-1" /> CSV
-                    </button>
-                    <button onClick={() => downloadResults('excel')} className="text-xs bg-white border border-slate-300 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-50 font-bold transition flex items-center shadow-sm">
-                        <Download className="w-3 h-3 mr-1" /> Excel
-                    </button>
-                </div>
-            )}
-         </div>
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+      <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center">
+        <svg className="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+        </svg>
+        Batch File Analysis
+      </h2>
 
-         {/* File Upload Area */}
-         {!data && (
-            <div className="flex-1 p-6 flex flex-col items-center justify-center">
-                <div
-                    className="w-full h-64 border-2 border-dashed border-indigo-200 rounded-xl bg-indigo-50/50 hover:bg-indigo-50 transition flex flex-col items-center justify-center cursor-pointer group"
-                    onClick={() => fileInputRef.current?.click()}
-                    onDragOver={handleDragOver}
-                    onDrop={handleDrop}
-                >
-                    <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-sm mb-4 group-hover:scale-110 transition-transform">
-                        <Upload className="w-8 h-8 text-indigo-500" />
-                    </div>
-                    <p className="text-slate-700 font-bold text-lg mb-1">Click or drag file to this area to upload</p>
-                    <p className="text-slate-500 text-sm">Supports .csv, .xlsx, .xls</p>
-                </div>
-                <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".csv,.xlsx,.xls" className="hidden" />
-
-                {error && (
-                    <div className="mt-4 bg-red-50 text-red-600 p-3 rounded-lg border border-red-200 text-sm font-medium w-full text-center">
-                        {error}
-                    </div>
-                )}
-            </div>
-         )}
-
-         {/* Data Preview & Analysis Controls */}
-         {data && !processedData && !processing && (
-            <div className="flex-1 flex flex-col overflow-hidden animate-in fade-in duration-300">
-                <div className="p-4 bg-white border-b border-slate-200">
-                    <div className="flex items-end gap-4">
-                        <div className="flex-1">
-                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Select Text Column to Analyze</label>
-                            {columns.length > 1 ? (
-                                <select
-                                    value={selectedCol}
-                                    onChange={(e) => setSelectedCol(e.target.value)}
-                                    className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-                                >
-                                    <option value="" disabled>Select a column</option>
-                                    {columns.map(c => <option key={c} value={c}>{c}</option>)}
-                                </select>
-                            ) : (
-                                <input
-                                    type="text"
-                                    value={selectedCol}
-                                    onChange={(e) => setSelectedCol(e.target.value)}
-                                    placeholder="Type column name (e.g. text)"
-                                    className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-                                />
-                            )}
-                        </div>
-                        <button
-                            onClick={runBatch}
-                            disabled={!selectedCol}
-                            className={`px-6 py-2.5 rounded-lg font-bold flex items-center transition shadow-sm
-                                ${!selectedCol ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
-                        >
-                            <Play className="w-4 h-4 mr-2" /> Run Analysis
-                        </button>
-                    </div>
-                    {error && <div className="mt-3 text-red-500 text-sm font-medium">{error}</div>}
-                </div>
-
-                <div className="flex-1 overflow-auto bg-slate-50 p-4">
-                    <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
-                        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                            Data Preview (First 10 rows)
-                        </div>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left">
-                                <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
-                                    <tr>
-                                        {columns.map((col, idx) => (
-                                            <th key={idx} className={`px-4 py-3 whitespace-nowrap ${col === selectedCol ? 'bg-indigo-50 text-indigo-700' : ''}`}>
-                                                {col}
-                                            </th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                    {data.map((row, idx) => (
-                                        <tr key={idx} className="hover:bg-slate-50">
-                                            {columns.map((col, cIdx) => (
-                                                <td key={cIdx} className={`px-4 py-2 max-w-[200px] truncate ${col === selectedCol ? 'bg-indigo-50/30 font-medium' : 'text-slate-600'}`}>
-                                                    {row[col]?.toString() || ''}
-                                                </td>
-                                            ))}
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
-         )}
-
-         {/* Processing State */}
-         {processing && (
-             <div className="flex-1 flex flex-col items-center justify-center p-8 bg-slate-50/50 backdrop-blur-sm absolute inset-0 z-20">
-                 <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 flex flex-col items-center max-w-sm w-full">
-                     <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
-                     <h3 className="text-xl font-bold text-slate-800 mb-2">Analyzing Data...</h3>
-                     <p className="text-sm text-slate-500 mb-6 text-center">Processing rows through NLP models. This might take a moment.</p>
-                     <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden border border-slate-200">
-                         <div className="bg-indigo-600 h-full transition-all duration-300 rounded-full" style={{ width: `${progress}%` }}></div>
-                     </div>
-                 </div>
-             </div>
-         )}
-
-         {/* Processed Data Table */}
-         {processedData && !processing && (
-             <div className="flex-1 overflow-auto animate-in fade-in duration-300">
-                 <table className="w-full text-sm text-left">
-                    <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0 shadow-sm z-10">
-                        <tr>
-                            <th className="px-4 py-3 w-12 text-center">#</th>
-                            <th className="px-4 py-3 min-w-[200px] max-w-[300px]">Text</th>
-                            <th className="px-4 py-3">Label</th>
-                            <th className="px-4 py-3">Mix Ratio</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                        {processedData.map((row, idx) => (
-                            <tr
-                                key={idx}
-                                onClick={() => setActiveRowIdx(idx)}
-                                className={`cursor-pointer transition-colors ${activeRowIdx === idx ? 'bg-indigo-50 border-l-4 border-l-indigo-500' : 'hover:bg-slate-50 border-l-4 border-l-transparent'}`}
-                            >
-                                <td className="px-4 py-3 text-slate-400 font-mono text-xs text-center">{idx + 1}</td>
-                                <td className="px-4 py-3 truncate max-w-[300px] text-slate-700 font-medium">
-                                    {row[selectedCol]?.toString() || row.text}
-                                </td>
-                                <td className="px-4 py-3">
-                                    {row.label ? (
-                                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold flex inline-flex items-center gap-1
-                                            ${row.label === 'positive' || row.label === 'true' ? 'bg-emerald-100 text-emerald-700' :
-                                              row.label === 'negative' || row.label === 'fake' ? 'bg-red-100 text-red-700' :
-                                              'bg-slate-100 text-slate-700'}`}>
-                                            {row.label} {row.emoji}
-                                        </span>
-                                    ) : <span className="text-slate-400 text-xs italic">N/A</span>}
-                                </td>
-                                <td className="px-4 py-3 text-slate-600 font-mono text-xs font-bold">
-                                    {row.code_mix_ratio || 0}
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                 </table>
-             </div>
-         )}
+      {/* Upload Section */}
+      <div className="mb-6">
+        <label className="block text-sm font-medium text-slate-700 mb-2">1. Upload Dataset (CSV or Excel)</label>
+        <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 flex justify-center items-center bg-slate-50 hover:bg-slate-100 transition-colors">
+          <input
+            type="file"
+            accept=".csv, .xlsx"
+            onChange={handleFileUpload}
+            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+          />
+        </div>
+        {file && <p className="mt-2 text-sm text-slate-600">Selected file: <span className="font-semibold text-slate-800">{file.name}</span></p>}
       </div>
 
-      {/* Right Pane - Detail View (Matches Screenshot style but light theme) */}
-      <div className="w-full lg:w-1/2 flex flex-col bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden relative">
-         <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between z-10">
-            <h2 className="font-bold text-slate-800 text-lg flex items-center">
-                <Code className="w-5 h-5 mr-2 text-indigo-500" />
-                Row Analysis Output
-            </h2>
-            {activeRowIdx !== null && (
-                <div className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
-                    Row {activeRowIdx + 1} Selected
-                </div>
-            )}
-         </div>
+      {/* Configuration Section */}
+      {columns.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6 p-4 bg-slate-50 rounded-lg border border-slate-200">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">2. Select Text Column</label>
+            <select
+              value={selectedColumn}
+              onChange={(e) => setSelectedColumn(e.target.value)}
+              className="w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 bg-white p-2 border"
+            >
+              {columns.map(col => (
+                <option key={col} value={col}>{col}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">3. Select Model</label>
+            <select
+              value={modelType}
+              onChange={(e) => setModelType(e.target.value)}
+              className="w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 bg-white p-2 border"
+            >
+              <option value="smart">Smart Router (Auto-detect)</option>
+              <option value="all">All Models</option>
+              <option value="misinfo">Misinformation Detection</option>
+              <option value="fakenews">Fake News Classification</option>
+              <option value="emosen">Sentiment Analysis</option>
+              <option value="text">Text Analysis Only</option>
+            </select>
+          </div>
+        </div>
+      )}
 
-         {!processedData ? (
-             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400">
-                 <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4 border border-slate-100 shadow-sm">
-                     <Layers className="w-8 h-8 text-slate-300" />
-                 </div>
-                 <p className="font-medium text-slate-500">Run batch analysis and click a row to view its detailed JSON output here.</p>
-             </div>
-         ) : activeRowIdx === null ? (
-             <div className="flex-1 flex items-center justify-center text-slate-500 font-medium">
-                 Click on a row in the left table to view details.
-             </div>
-         ) : (
-             <div className="flex-1 flex flex-col overflow-hidden animate-in fade-in duration-300">
-
-                 {/* Original Text Block */}
-                 <div className="p-5 border-b border-slate-200 bg-slate-50/50">
-                    <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Input Text</div>
-                    <div className="bg-white border border-slate-200 rounded-lg p-4 text-slate-800 font-medium shadow-sm break-words">
-                        {processedData[activeRowIdx]?.[selectedCol]?.toString() || processedData[activeRowIdx]?.text || "No text available"}
-                    </div>
-                 </div>
-
-                 {/* Tabs */}
-                 <div className="flex overflow-x-auto border-b border-slate-200 bg-slate-50 hide-scrollbar px-2">
-                    {[
-                        { id: 'model', label: 'Model Result' },
-                        { id: 'scripts', label: 'Scripts & Languages' },
-                        { id: 'slang', label: 'Slang Detected' },
-                        { id: 'phonemes', label: 'Phoneme Hints' },
-                        { id: 'stats', label: 'Text Stats' },
-                    ].map(tab => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id)}
-                            className={`whitespace-nowrap px-4 py-3 text-sm font-bold transition-colors border-b-2
-                                ${activeTab === tab.id ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-100/50'}`}
-                        >
-                            {tab.label}
-                        </button>
-                    ))}
-                 </div>
-
-                 {/* Tab Content */}
-                 <div className="flex-1 overflow-auto p-5 bg-slate-50/50">
-                    {renderTabContent(getActiveRowJson())}
-                 </div>
-
-                 {/* Raw JSON View at Bottom */}
-                 <div className="h-64 border-t border-slate-200 flex flex-col">
-                    <div className="px-4 py-2 bg-slate-100 border-b border-slate-200 text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center justify-between">
-                        <span>Raw JSON Output</span>
-                        <span className="bg-slate-200 text-slate-500 px-2 py-0.5 rounded text-[10px]">models1.py format</span>
-                    </div>
-                    <div className="flex-1 bg-slate-900 overflow-auto p-4">
-                        <pre className="text-emerald-400 font-mono text-sm">
-                            {JSON.stringify(getActiveRowJson(), null, 2)}
-                        </pre>
-                    </div>
-                 </div>
-             </div>
-         )}
+      {/* Action Button */}
+      <div className="flex justify-center mb-6">
+        <button
+          onClick={runAnalysis}
+          disabled={!file || !selectedColumn || loading}
+          className={`flex items-center px-6 py-3 rounded-lg text-white font-medium transition-colors ${
+            !file || !selectedColumn || loading ? 'bg-indigo-300 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 shadow-md hover:shadow-lg'
+          }`}
+        >
+          {loading ? (
+            <>
+              <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Analyzing... {progress}%
+            </>
+          ) : (
+            <>
+              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Run Batch Analysis
+            </>
+          )}
+        </button>
       </div>
+
+      {/* Error Display */}
+      {error && (
+        <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-500 text-red-700 rounded-md flex items-start">
+          <svg className="w-5 h-5 mr-2 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <p>{error}</p>
+        </div>
+      )}
+
+      {/* Results Display */}
+      {results && (
+        <div className="mt-8 animate-fade-in">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-slate-800 flex items-center">
+              <svg className="w-5 h-5 mr-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Analysis Complete
+            </h3>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => exportResults('csv')}
+                className="px-3 py-1.5 bg-white border border-slate-300 rounded text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+              >
+                Export CSV
+              </button>
+              <button
+                onClick={() => exportResults('excel')}
+                className="px-3 py-1.5 bg-white border border-slate-300 rounded text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+              >
+                Export Excel
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-green-50 text-green-800 p-4 rounded-lg border border-green-200 mb-6">
+            <p className="font-medium">Successfully processed {results.length} rows.</p>
+            <p className="text-sm mt-1 text-green-700">Click the export buttons above to download the detailed results appended to your data.</p>
+          </div>
+
+          <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+             <h4 className="font-semibold text-slate-700 mb-2">Preview of First Row Result:</h4>
+             <pre className="bg-slate-800 text-slate-100 p-4 rounded text-xs overflow-auto max-h-60">
+                 {JSON.stringify(results[0], null, 2)}
+             </pre>
+          </div>
+        </div>
+      )}
     </div>
   );
-}
+};
+
+export default BatchAnalysis;
