@@ -61,18 +61,21 @@ warnings.filterwarnings("ignore")
 # Reads from env vars first, falls back to original hardcoded paths.
 # This means the file works locally with zero changes AND on cloud
 # just by setting env vars — no code edits needed.
+# Use absolute paths relative to the current file (models.py)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # ─────────────────────────────────────────────────────────────
 MISINFO_MODEL_DIR  = os.environ.get(
     "MISINFO_MODEL_DIR",
-    "models/misinfo"
+    os.path.join(BASE_DIR, "models/misinfo")
 )
 FAKENEWS_MODEL_DIR = os.environ.get(
     "FAKENEWS_MODEL_DIR",
-    "models/fakenews"
+    os.path.join(BASE_DIR, "models/fakenews")
 )
 EMOSEN_MODEL_DIR   = os.environ.get(
     "EMOSEN_MODEL_DIR",
-    "models/emosen"
+    os.path.join(BASE_DIR, "models/emosen")
 )
 
 # ─────────────────────────────────────────────────────────────
