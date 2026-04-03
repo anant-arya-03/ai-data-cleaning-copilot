@@ -35,8 +35,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
-
 # In-memory storage for the current dataset and state
 # (In a real production app with multiple users, use Redis or a DB. We use memory as per requirements.)
 current_state = {
@@ -392,6 +390,8 @@ def export_data():
         "data": df_clean.to_dict(orient="records"),
         "columns": list(df_clean.columns)
     }
+
+app.include_router(router)
 
 if __name__ == "__main__":
     import uvicorn
