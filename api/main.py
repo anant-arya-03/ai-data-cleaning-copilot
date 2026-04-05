@@ -74,9 +74,33 @@ class NlpBatchRequest(BaseModel):
 def health_check():
     return {"status": "ok"}
 
+@router.get("/")
+def api_root():
+    return {
+        "message": "AI Data Cleaning Copilot API",
+        "endpoints": {
+            "GET /api/health": "Health check",
+            "GET /api/nlp/health": "NLP status check",
+            "GET /api/nlp/test?text=...": "Test NLP predictions from browser",
+            "POST /api/nlp/predict/{model_type}": "Production NLP prediction",
+            "POST /api/nlp/batch_file": "Batch process CSV/Excel",
+            "POST /api/upload": "Upload dataset for cleaning",
+        }
+    }
+
 @router.get("/nlp/health")
 def nlp_health():
     return {"status": "online"}
+
+@router.get("/nlp/test")
+def nlp_test(text: str):
+    """
+    GET endpoint for easily testing the NLP models from the browser.
+    Example: /api/nlp/test?text=this is a fake news tweet
+    """
+    if not text:
+        raise HTTPException(status_code=400, detail="Query parameter 'text' is required.")
+    return smart_predict(text)
 
 @router.post("/nlp/predict/{model_type}")
 def nlp_predict(model_type: str, req: NlpRequest):
