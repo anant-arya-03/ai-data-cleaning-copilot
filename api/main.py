@@ -24,7 +24,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
+@app.get("/")
+def root():
+    return {"message": "Backend is running 🚀"}
 
 # In-memory storage for the current dataset and state
 # (In a real production app with multiple users, use Redis or a DB. We use memory as per requirements.)
@@ -366,6 +368,9 @@ def export_data():
         "columns": list(df_clean.columns)
     }
 
+# Include router at the bottom AFTER all routes have been defined
+app.include_router(router)
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=7860, reload=True)
