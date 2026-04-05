@@ -10,22 +10,11 @@ import json
 from cleaner import detect_column_types, generate_profile, apply_missing_strategy
 from flashfill import get_suggestions, apply_transformation
 from anomaly import detect_anomalies, get_rename_suggestions
-from models1 import load_models, smart_predict, predict_batch, predict_misinfo, predict_fakenews, predict_emosen, predict_all, analyse_text
+from models import smart_predict, predict_batch, predict_misinfo, predict_fakenews, predict_emosen, predict_all, analyse_text
 
 app = FastAPI(title="AI Data Cleaning Copilot Backend")
 
 router = APIRouter(prefix="/api")
-
-# Initialize models at startup
-app.state.nlp_models = None
-
-@app.on_event("startup")
-def startup_event():
-    # Attempt to load models, but don't crash if paths don't exist yet
-    try:
-        app.state.nlp_models = load_models()
-    except Exception as e:
-        print(f"Warning: Could not initialize all NLP models on startup: {e}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -85,29 +74,22 @@ def health_check():
 
 @router.get("/nlp/health")
 def nlp_health():
-    if app.state.nlp_models is None:
-         return {"status": "offline", "message": "Models not loaded"}
     return {"status": "online"}
 
 @router.post("/nlp/predict/{model_type}")
 def nlp_predict(model_type: str, req: NlpRequest):
-    if app.state.nlp_models is None:
-        # Load them on demand if failed on startup
-        app.state.nlp_models = load_models()
-
     text = req.text
-    models = app.state.nlp_models
 
     if model_type == "misinfo":
-        return predict_misinfo(text, models)
+        return predict_misinfo(text)
     elif model_type == "fakenews":
-        return predict_fakenews(text, models)
+        return predict_fakenews(text)
     elif model_type == "emosen":
-        return predict_emosen(text, models)
+        return predict_emosen(text)
     elif model_type == "all":
-        return predict_all(text, models)
+        return predict_all(text)
     elif model_type == "smart":
-        return smart_predict(text, models)
+        return smart_predict(text)
     elif model_type == "text":
         return {"text_analysis": analyse_text(text)}
     else:
@@ -119,9 +101,6 @@ async def nlp_batch_file(
     model_type: str = Form(...),
     column: str = Form(...)
 ):
-    if app.state.nlp_models is None:
-        app.state.nlp_models = load_models()
-
     if not file.filename.endswith(('.csv', '.xlsx')):
         raise HTTPException(status_code=400, detail="Only CSV or Excel files are accepted")
 
@@ -141,17 +120,17 @@ async def nlp_batch_file(
         results = []
         for text in texts:
             if model_type == "misinfo":
-                res = predict_misinfo(text, app.state.nlp_models)
+                res = predict_misinfo(text)
             elif model_type == "fakenews":
-                res = predict_fakenews(text, app.state.nlp_models)
+                res = predict_fakenews(text)
             elif model_type == "emosen":
-                res = predict_emosen(text, app.state.nlp_models)
+                res = predict_emosen(text)
             elif model_type == "all":
-                res = predict_all(text, app.state.nlp_models)
+                res = predict_all(text)
             elif model_type == "text":
                 res = {"text_analysis": analyse_text(text)}
             else:
-                res = smart_predict(text, app.state.nlp_models)
+                res = smart_predict(text)
             results.append(res)
 
         # Append results to the original dataframe

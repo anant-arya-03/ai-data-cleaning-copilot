@@ -42,47 +42,12 @@ DEPLOYMENT QUICK-START:
 
 import os
 import re
-import gc
 import warnings
 import unicodedata
-import threading
-from contextlib import contextmanager
 
-import numpy as np
-import torch
-import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from sklearn.preprocessing import LabelEncoder
+from hf_client import call_hf_api, MODEL_1_URL, MODEL_2_URL, MODEL_3_URL
 
 warnings.filterwarnings("ignore")
-
-# ─────────────────────────────────────────────────────────────
-# PATH RESOLUTION
-# Reads from env vars first, falls back to original hardcoded paths.
-# This means the file works locally with zero changes AND on cloud
-# just by setting env vars — no code edits needed.
-# ─────────────────────────────────────────────────────────────
-MISINFO_MODEL_DIR  = os.environ.get(
-    "MISINFO_MODEL_DIR",
-    os.path.expanduser("~/misinfo_project/best_model")
-)
-FAKENEWS_MODEL_DIR = os.environ.get(
-    "FAKENEWS_MODEL_DIR",
-    os.path.expanduser("~/fake_news_project/models/best_model")
-)
-EMOSEN_MODEL_DIR   = os.environ.get(
-    "EMOSEN_MODEL_DIR",
-    os.path.expanduser("~/emosen_project/models/best_model")
-)
-
-# ─────────────────────────────────────────────────────────────
-# QUANTIZATION FLAG
-# Set env var QUANTIZE=true to enable INT8 dynamic quantization.
-# This halves RAM usage with typically <1% accuracy change.
-# Recommended for CPU-only cloud deployments (Railway, Render).
-# NOT recommended when GPU is available (GPU already handles memory well).
-# ─────────────────────────────────────────────────────────────
-ENABLE_QUANTIZE = os.environ.get("QUANTIZE", "false").lower() == "true"
 
 # ─────────────────────────────────────────────────────────────
 # ROUTING THRESHOLD (unchanged from original)
@@ -128,249 +93,77 @@ def clean_tweet(text: str) -> str:
     return text.strip()
 
 
-# ═════════════════════════════════════════════════════════════
-#  LAZY SINGLETON MODEL STORE
-#
-#  Problem with original:  load_models() was called at startup,
-#  loading all 3 models (~4–6 GB) into RAM immediately.
-#  On Vercel/serverless this crashes because:
-#    1. No persistent RAM between requests
-#    2. Cold-start RAM limit exceeded before first request
-#    3. 250MB deployment size limit exceeded
-#
-#  Fix: models are loaded once on the FIRST real request,
-#  then cached in a thread-safe singleton for all future requests.
-#  On cloud platforms that keep the process alive (HF Spaces,
-#  Railway, Render), models stay warm in RAM — same as running
-#  locally. On true serverless (Vercel), use HF Spaces instead.
-# ═════════════════════════════════════════════════════════════
-
-class _ModelStore:
-    """Thread-safe lazy singleton that holds all 3 loaded models."""
-
-    def __init__(self):
-        self._models  = None
-        self._lock    = threading.Lock()
-        self._loading = False
-
-    def _apply_quantization(self, model):
-        """
-        Apply INT8 dynamic quantization to Linear layers only.
-        - Does NOT change the model's weights or parameters
-        - Does NOT change tokenizer or inference logic
-        - Reduces RAM by ~50% for CPU deployments
-        - Accuracy impact: typically <1% on classification tasks
-        - Only applied when QUANTIZE=true env var is set
-        """
-        if not ENABLE_QUANTIZE:
-            return model
-        print("  Applying INT8 quantization (CPU RAM optimisation)...")
-        return torch.quantization.quantize_dynamic(
-            model,
-            {torch.nn.Linear},
-            dtype=torch.qint8
-        )
-
-    def _load(self, misinfo_dir, fakenews_dir, emosen_dir) -> dict:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Device: {device}")
-
-        if ENABLE_QUANTIZE and device.type == "cuda":
-            print("  Note: QUANTIZE=true ignored on GPU (not needed)")
-
-        # ── Model 1: Misinfo ──────────────────────────────────
-        print(f"\n[1/3] Loading Misinfo model from {misinfo_dir} ...")
-        m_tok   = AutoTokenizer.from_pretrained(misinfo_dir)
-        m_model = AutoModelForSequenceClassification.from_pretrained(
-            misinfo_dir,
-            torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
-            low_cpu_mem_usage=True,   # stream weights from disk instead of double-buffering
-        )
-        if device.type != "cuda":
-            m_model = self._apply_quantization(m_model)
-        m_model.to(device).eval()
-        print("  ✓ Misinfo model ready")
-
-        # ── Model 2: Fake News ────────────────────────────────
-        print(f"\n[2/3] Loading Fake News model from {fakenews_dir} ...")
-        f_tok   = AutoTokenizer.from_pretrained(fakenews_dir)
-        f_model = AutoModelForSequenceClassification.from_pretrained(
-            fakenews_dir,
-            torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
-            low_cpu_mem_usage=True,
-        )
-        if device.type != "cuda":
-            f_model = self._apply_quantization(f_model)
-        f_model.to(device).eval()
-        print("  ✓ Fake News model ready")
-
-        # ── Model 3: EmoSen ───────────────────────────────────
-        print(f"\n[3/3] Loading EmoSen model from {emosen_dir} ...")
-        e_tok   = AutoTokenizer.from_pretrained(emosen_dir)
-        e_model = AutoModelForSequenceClassification.from_pretrained(
-            emosen_dir,
-            torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
-            low_cpu_mem_usage=True,
-        )
-        if device.type != "cuda":
-            e_model = self._apply_quantization(e_model)
-        e_model.to(device).eval()
-
-        label_encoder = LabelEncoder()
-        label_encoder.classes_ = np.load(
-            os.path.join(emosen_dir, "label_classes.npy"), allow_pickle=True
-        )
-        print("  ✓ EmoSen model ready")
-        print(f"  Sentiment classes: {list(label_encoder.classes_)}\n")
-
-        return {
-            "device":   device,
-            "misinfo":  {"model": m_model, "tokenizer": m_tok},
-            "fakenews": {"model": f_model, "tokenizer": f_tok},
-            "emosen":   {"model": e_model, "tokenizer": e_tok,
-                         "label_encoder": label_encoder},
-            "loaded":   True,
-        }
-
-    def get(self,
-            misinfo_dir:  str = MISINFO_MODEL_DIR,
-            fakenews_dir: str = FAKENEWS_MODEL_DIR,
-            emosen_dir:   str = EMOSEN_MODEL_DIR) -> dict:
-        """
-        Return cached models, loading them on first call.
-        Thread-safe: multiple simultaneous requests will wait
-        for the first load to finish rather than double-loading.
-        """
-        if self._models is not None:
-            return self._models
-
-        with self._lock:
-            # Double-check after acquiring lock
-            if self._models is None:
-                self._models = self._load(misinfo_dir, fakenews_dir, emosen_dir)
-
-        return self._models
-
-    @property
-    def is_loaded(self) -> bool:
-        return self._models is not None
-
-    def status(self) -> dict:
-        """For /health endpoint."""
-        if not self.is_loaded:
-            return {"loaded": False, "device": None, "quantized": ENABLE_QUANTIZE}
-        return {
-            "loaded":    True,
-            "device":    str(self._models["device"]),
-            "quantized": ENABLE_QUANTIZE,
-            "models":    ["misinfo", "fakenews", "emosen"],
-        }
-
-
-# Global singleton — one instance for the entire process lifetime
-_store = _ModelStore()
-
-
-# ═════════════════════════════════════════════════════════════
-#  PUBLIC API: load_models()
-#
-#  Fully backward-compatible with original.
-#  Calling load_models() still works exactly as before.
-#  But now it is safe to call at startup OR to skip entirely
-#  (models will auto-load on first predict_* call).
-# ═════════════════════════════════════════════════════════════
-
-def load_models(
-    misinfo_dir:  str = MISINFO_MODEL_DIR,
-    fakenews_dir: str = FAKENEWS_MODEL_DIR,
-    emosen_dir:   str = EMOSEN_MODEL_DIR,
-) -> dict:
-    """
-    Load all 3 models and return the models dict.
-    Safe to call multiple times — returns cached models after first load.
-    Compatible with original call signature.
-    """
-    return _store.get(misinfo_dir, fakenews_dir, emosen_dir)
-
-
-def get_models() -> dict:
-    """
-    Alternative to load_models() — auto-uses env var paths.
-    Preferred for cloud deployments where paths come from env vars.
-    """
-    return _store.get()
+def _get_probs(api_result: dict, default_length: int = 2) -> list:
+    """Helper to extract probabilities list from HF API response"""
+    probs = [0.0] * default_length
+    if api_result["status"] == "success":
+        # Usually returns [[{"label": "LABEL_1", "score": 0.9}, ...]]
+        data = api_result["data"]
+        if isinstance(data, list) and len(data) > 0:
+            item = data[0]
+            if isinstance(item, list):
+                # Process nested list
+                for entry in item:
+                    # Basic mapping handling string labels to indices if required
+                    label_str = entry.get("label", "")
+                    score = entry.get("score", 0.0)
+                    # Extract index from "LABEL_0", "LABEL_1", etc.
+                    try:
+                        idx = int(label_str.split("_")[-1])
+                        if idx < len(probs):
+                            probs[idx] = score
+                        else:
+                            probs.extend([0.0] * (idx - len(probs) + 1))
+                            probs[idx] = score
+                    except ValueError:
+                        pass
+            elif isinstance(item, dict):
+                # Similar mapping logic for flat lists
+                label_str = item.get("label", "")
+                score = item.get("score", 0.0)
+                try:
+                    idx = int(label_str.split("_")[-1])
+                    if idx < len(probs):
+                        probs[idx] = score
+                    else:
+                        probs.extend([0.0] * (idx - len(probs) + 1))
+                        probs[idx] = score
+                except ValueError:
+                    pass
+    # Normalize if needed or just return raw scores
+    return probs
 
 
 def models_status() -> dict:
     """Returns health/status dict. Use in /health endpoint."""
-    return _store.status()
-
-
-# ═════════════════════════════════════════════════════════════
-#  CORE INFERENCE  (identical to original — not touched)
-# ═════════════════════════════════════════════════════════════
-
-@contextmanager
-def _gpu_cleanup():
-    """
-    Context manager: clears GPU cache after inference on CUDA.
-    Prevents memory fragmentation on long-running servers.
-    On CPU this is a no-op.
-    """
-    try:
-        yield
-    finally:
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            gc.collect()
-
-
-@torch.no_grad()
-def _infer(model, tokenizer, text: str, device, max_len: int = 256) -> np.ndarray:
-    """
-    Run a single forward pass and return softmax probabilities.
-    IDENTICAL to original — only added gpu_cleanup context.
-    """
-    with _gpu_cleanup():
-        enc = tokenizer(
-            text, truncation=True, padding="max_length",
-            max_length=max_len, return_tensors="pt"
-        )
-        enc    = {k: v.to(device) for k, v in enc.items()}
-        logits = model(**enc).logits
-        probs  = F.softmax(logits, dim=1).cpu().numpy()[0]
-    return probs
+    return {
+        "loaded": True, # For backward compatibility with health check
+        "type": "hugging_face_api",
+        "models": ["misinfo", "fakenews", "emosen"]
+    }
 
 
 # ═════════════════════════════════════════════════════════════
 #  PUBLIC PREDICTION FUNCTIONS
 #  Identical to original EXCEPT:
-#    - models param is now optional (auto-loads if not passed)
-#    - this makes them work in serverless / cloud without
-#      explicit load_models() call at startup
+#    - models param is ignored (kept for backwards compatibility)
+#    - utilizes `hf_client` for API inference
 # ═════════════════════════════════════════════════════════════
 
 def predict_misinfo(text: str, models: dict = None) -> dict:
-    """
-    Misinformation detection.
-    models param is optional — auto-loads on first call if not provided.
-    Return format identical to original.
-    """
-    if models is None:
-        models = get_models()
-
+    """Misinformation detection via Hugging Face API."""
     text = text.strip()
     if len(text.split()) < 3:
         return {"error": "Text too short. Please enter at least 3 words."}
 
     cleaned = clean_news(text)
-    probs   = _infer(
-        models["misinfo"]["model"],
-        models["misinfo"]["tokenizer"],
-        cleaned,
-        models["device"],
-        max_len=256,
-    )
+    api_res = call_hf_api(MODEL_1_URL, cleaned)
+
+    if api_res["status"] == "error":
+        return {"error": api_res["error"]}
+
+    probs = _get_probs(api_res, default_length=2)
+
     pred  = int(probs[1] > 0.5)
     label = "misinfo" if pred else "nonmisinfo"
 
@@ -384,26 +177,24 @@ def predict_misinfo(text: str, models: dict = None) -> dict:
 
 
 def predict_fakenews(text: str, models: dict = None) -> dict:
-    """
-    Fake news classification (6 classes).
-    models param is optional — auto-loads on first call if not provided.
-    Return format identical to original.
-    """
-    if models is None:
-        models = get_models()
-
+    """Fake news classification via Hugging Face API."""
     text = text.strip()
     if len(text.split()) < 3:
         return {"error": "Text too short. Please enter at least 3 words."}
 
-    cleaned  = clean_news(text)
-    probs    = _infer(
-        models["fakenews"]["model"],
-        models["fakenews"]["tokenizer"],
-        cleaned,
-        models["device"],
-        max_len=256,
-    )
+    cleaned = clean_news(text)
+    api_res = call_hf_api(MODEL_2_URL, cleaned)
+
+    if api_res["status"] == "error":
+        return {"error": api_res["error"]}
+
+    probs = _get_probs(api_res, default_length=6)
+
+    # Ensure probabilities list matches expected map length
+    if len(probs) < len(FAKENEWS_LABEL_MAP):
+        probs.extend([0.0] * (len(FAKENEWS_LABEL_MAP) - len(probs)))
+
+    import numpy as np
     pred_idx = int(np.argmax(probs))
     label    = FAKENEWS_LABEL_MAP.get(pred_idx, str(pred_idx))
 
@@ -412,77 +203,71 @@ def predict_fakenews(text: str, models: dict = None) -> dict:
         "emoji":      FAKENEWS_EMOJI.get(label, ""),
         "confidence": round(float(probs[pred_idx]) * 100, 2),
         "all_scores": {
-            FAKENEWS_LABEL_MAP[i]: round(float(probs[i]) * 100, 2)
-            for i in range(len(probs))
+            FAKENEWS_LABEL_MAP.get(i, f"class_{i}"): round(float(probs[i]) * 100, 2)
+            for i in range(len(probs)) if i in FAKENEWS_LABEL_MAP
         },
         "text_analysis": analyse_text(text),
     }
 
 
 def predict_emosen(text: str, models: dict = None) -> dict:
-    """
-    Sentiment analysis for Hinglish / code-mix text.
-    models param is optional — auto-loads on first call if not provided.
-    Return format identical to original.
-    """
-    if models is None:
-        models = get_models()
-
+    """Sentiment analysis via Hugging Face API."""
     text = text.strip()
     if len(text.split()) < 2:
         return {"error": "Text too short."}
 
-    le       = models["emosen"]["label_encoder"]
-    cleaned  = clean_tweet(text)
-    probs    = _infer(
-        models["emosen"]["model"],
-        models["emosen"]["tokenizer"],
-        cleaned,
-        models["device"],
-        max_len=128,
-    )
+    # Hardcoding sentiment classes instead of using LabelEncoder
+    emosen_classes = ["negative", "neutral", "positive"]
+
+    cleaned = clean_tweet(text)
+    api_res = call_hf_api(MODEL_3_URL, cleaned)
+
+    if api_res["status"] == "error":
+        return {"error": api_res["error"]}
+
+    probs = _get_probs(api_res, default_length=3)
+
+    # Ensure probabilities list matches expected map length
+    if len(probs) < len(emosen_classes):
+        probs.extend([0.0] * (len(emosen_classes) - len(probs)))
+
+    import numpy as np
     pred_idx = int(np.argmax(probs))
-    label    = le.inverse_transform([pred_idx])[0]
+    label    = emosen_classes[pred_idx] if pred_idx < len(emosen_classes) else "unknown"
 
     return {
         "label":      label,
         "emoji":      SENTIMENT_EMOJI.get(label.lower(), "💬"),
         "confidence": round(float(probs[pred_idx]) * 100, 2),
         "all_scores": {
-            le.classes_[i]: round(float(probs[i]) * 100, 2)
-            for i in range(len(probs))
+            emosen_classes[i]: round(float(probs[i]) * 100, 2)
+            for i in range(min(len(probs), len(emosen_classes)))
         },
         "text_analysis": analyse_text(text),
     }
 
 
 def predict_all(text: str, models: dict = None) -> dict:
-    """
-    Run all 3 models on the same text.
-    models param is optional. Return format identical to original.
-    """
-    if models is None:
-        models = get_models()
-
+    """Run all 3 models on the same text via HF API."""
     text    = text.strip()
     results = {"text_analysis": analyse_text(text)}
 
     try:
-        r = predict_misinfo(text, models)
+        r = predict_misinfo(text)
         r.pop("text_analysis", None)
         results["misinfo"] = r
     except Exception as e:
         results["misinfo"] = {"error": str(e)}
 
     try:
-        r = predict_fakenews(text, models)
+        r = predict_fakenews(text)
         r.pop("text_analysis", None)
         results["fakenews"] = r
     except Exception as e:
         results["fakenews"] = {"error": str(e)}
 
     try:
-        r = predict_emosen(text, models)
+        r = predict_emosen(text)
         r.pop("text_analysis", None)
         results["emosen"] = r
     except Exception as e:
@@ -497,13 +282,7 @@ def predict_all(text: str, models: dict = None) -> dict:
 
 def smart_predict(text: str, models: dict = None,
                   threshold: float = CODEMIX_THRESHOLD) -> dict:
-    """
-    Auto-routes text to correct model based on language detection.
-    models param is optional. Logic identical to original.
-    """
-    if models is None:
-        models = get_models()
-
+    """Auto-routes text to correct model based on language detection."""
     text     = text.strip()
     analysis = analyse_text(text)
     langs    = analysis["languages_detected"]
@@ -512,13 +291,13 @@ def smart_predict(text: str, models: dict = None,
     is_codemix = ratio > threshold or "Code-mix (Hinglish)" in langs
 
     if is_codemix:
-        result = predict_emosen(text, models)
+        result = predict_emosen(text)
         result.pop("text_analysis", None)
         result["routed_to"]     = "emosen"
         result["text_analysis"] = analysis
     else:
-        misinfo  = predict_misinfo(text, models)
-        fakenews = predict_fakenews(text, models)
+        misinfo  = predict_misinfo(text)
+        fakenews = predict_fakenews(text)
         misinfo.pop("text_analysis", None)
         fakenews.pop("text_analysis", None)
         result = {
@@ -537,13 +316,7 @@ def predict_batch(
     threshold: float = CODEMIX_THRESHOLD,
     verbose: bool = True,
 ) -> list:
-    """
-    Process a list of texts with auto-routing.
-    models param is optional. Logic identical to original.
-    """
-    if models is None:
-        models = get_models()
-
+    """Process a list of texts with auto-routing."""
     results = []
     total   = len(texts)
 
@@ -551,7 +324,7 @@ def predict_batch(
         if verbose and (i % 10 == 0 or i == 1 or i == total):
             print(f"  [{i}/{total}] Processing...")
         try:
-            results.append(smart_predict(str(text), models, threshold=threshold))
+            results.append(smart_predict(str(text), threshold=threshold))
         except Exception as e:
             results.append({"error": str(e), "routed_to": None, "input": text})
 
