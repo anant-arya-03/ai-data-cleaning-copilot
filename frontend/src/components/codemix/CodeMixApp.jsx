@@ -65,8 +65,8 @@ export default function CodeMixApp() {
         <div className="bg-rose-50 border border-rose-200 p-6 rounded-xl flex items-start shadow-sm">
           <ServerCrash className="w-8 h-8 text-rose-500 mr-4 flex-shrink-0" />
           <div>
-            <h3 className="text-lg font-bold text-rose-800 mb-1">NLP Models Not Loaded</h3>
-            <p className="text-rose-600 mb-2 font-medium">The NLP models failed to load. Please ensure paths in <code>models1.py</code> are correct and models are downloaded.</p>
+            <h3 className="text-lg font-bold text-rose-800 mb-1">Backend Connection Failed</h3>
+            <p className="text-rose-600 mb-2 font-medium">The frontend is unable to reach the FastAPI backend. If deployed on Vercel, ensure you have set the <code>VITE_HF_API_URL</code> environment variable to your Hugging Face Space URL.</p>
           </div>
         </div>
       )}
