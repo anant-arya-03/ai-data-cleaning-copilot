@@ -132,10 +132,24 @@ async def nlp_batch_file(
 
     content = await file.read()
     try:
+        if len(content) == 0:
+            raise HTTPException(status_code=400, detail="File is empty")
+
         if file.filename.endswith('.csv'):
-            df = pd.read_csv(io.BytesIO(content))
+            try:
+                df = pd.read_csv(io.BytesIO(content))
+            except pd.errors.EmptyDataError:
+                raise HTTPException(status_code=400, detail="File has no data or is invalid")
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid CSV file: {str(e)}")
         else:
-            df = pd.read_excel(io.BytesIO(content))
+            try:
+                df = pd.read_excel(io.BytesIO(content))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid Excel file: {str(e)}")
+
+        if len(df) == 0:
+            raise HTTPException(status_code=400, detail="File has no rows")
 
         if column not in df.columns:
             raise HTTPException(status_code=400, detail=f"Column '{column}' not found in file")
@@ -211,7 +225,12 @@ async def upload_file(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="File is empty")
 
         # Parse CSV
-        df = pd.read_csv(io.BytesIO(content))
+        try:
+            df = pd.read_csv(io.BytesIO(content))
+        except pd.errors.EmptyDataError:
+            raise HTTPException(status_code=400, detail="File has no data or is invalid")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid CSV file: {str(e)}")
 
         if len(df) == 0:
              raise HTTPException(status_code=400, detail="File has no rows")

@@ -22,7 +22,7 @@ def detect_column_types(df: pd.DataFrame) -> dict:
                 col_type = "numeric"
         elif df[col].dtype == 'bool':
             col_type = "boolean"
-        elif df[col].dtype == 'datetime64[ns]' or pd.core.dtypes.common.is_datetime_or_timedelta_dtype(df[col]):
+        elif df[col].dtype == 'datetime64[ns]' or pd.api.types.is_datetime64_any_dtype(df[col]) or pd.api.types.is_timedelta64_dtype(df[col]):
             col_type = "datetime"
         else:
             # String / Object

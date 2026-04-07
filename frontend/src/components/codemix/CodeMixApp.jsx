@@ -4,7 +4,7 @@ import { Activity, ServerCrash, Globe } from 'lucide-react';
 import SingleTextAnalysis from './SingleTextAnalysis';
 import BatchAnalysis from './BatchAnalysis';
 import { cn } from '../../utils';
-import { NLP_API_URL, API_URL } from '../../config';
+import { API_URL } from '../../config';
 
 export default function CodeMixApp() {
   const [apiStatus, setApiStatus] = useState('checking'); // checking, online, offline
@@ -16,7 +16,7 @@ export default function CodeMixApp() {
 
   const checkApiStatus = async () => {
     try {
-      const res = await axios.get(`${NLP_API_URL}/health`, { timeout: 3000 });
+      const res = await axios.get(`${API_URL}/nlp/health`, { timeout: 3000 });
       setApiStatus(res.data.status);
     } catch (err) {
       setApiStatus('offline');
@@ -74,7 +74,7 @@ export default function CodeMixApp() {
       {/* Main Content Area - Fill height */}
       <div className={cn("flex-1 min-h-0 transition-opacity duration-300", apiStatus !== 'online' ? 'opacity-50 pointer-events-none' : 'opacity-100')}>
         {activeTab === 'single' ? (
-          <SingleTextAnalysis apiUrl={NLP_API_URL} />
+          <SingleTextAnalysis apiUrl={API_URL} />
         ) : (
             <BatchAnalysis />
         )}

@@ -1,7 +1,2 @@
-// Use VITE_API_URL or VITE_HF_API_URL environment variable if provided
-// Otherwise, fall back to /api in production (if using Vercel rewrites) or localhost for dev.
-export const API_URL = import.meta.env.VITE_HF_API_URL || import.meta.env.VITE_API_URL
-  ? (import.meta.env.VITE_HF_API_URL || import.meta.env.VITE_API_URL)
-  : (import.meta.env.PROD ? '/api' : 'http://localhost:8000/api');
-
-export const NLP_API_URL = `${API_URL}/nlp`;
+export const NLP_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
