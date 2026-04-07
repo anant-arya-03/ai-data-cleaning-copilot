@@ -104,3 +104,11 @@ INFO:     127.0.0.1:34692 - "GET /api/nlp/health HTTP/1.1" 200 OK
 INFO:     127.0.0.1:34704 - "GET /api/nlp/health HTTP/1.1" 200 OK
 INFO:     127.0.0.1:34704 - "OPTIONS /api/nlp/predict/smart HTTP/1.1" 200 OK
 INFO:     127.0.0.1:34692 - "POST /api/nlp/predict/smart HTTP/1.1" 200 OK
+WARNING:  StatReload detected changes in 'hf_client.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [528829]
+INFO:     Started server process [554818]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
