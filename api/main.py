@@ -10,22 +10,11 @@ import json
 from cleaner import detect_column_types, generate_profile, apply_missing_strategy
 from flashfill import get_suggestions, apply_transformation
 from anomaly import detect_anomalies, get_rename_suggestions
-from models1 import load_models, smart_predict, predict_batch, predict_misinfo, predict_fakenews, predict_emosen, predict_all, analyse_text
+from models import smart_predict, predict_batch, predict_misinfo, predict_fakenews, predict_emosen, predict_all, analyse_text
 
 app = FastAPI(title="AI Data Cleaning Copilot Backend")
 
 router = APIRouter(prefix="/api")
-
-# Initialize models at startup
-app.state.nlp_models = None
-
-@app.on_event("startup")
-def startup_event():
-    # Attempt to load models, but don't crash if paths don't exist yet
-    try:
-        app.state.nlp_models = load_models()
-    except Exception as e:
-        print(f"Warning: Could not initialize all NLP models on startup: {e}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,7 +24,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router)
+@app.get("/")
+def root():
+    return {"message": "Backend is running 🚀"}
 
 # In-memory storage for the current dataset and state
 # (In a real production app with multiple users, use Redis or a DB. We use memory as per requirements.)
@@ -83,31 +74,48 @@ class NlpBatchRequest(BaseModel):
 def health_check():
     return {"status": "ok"}
 
+@router.get("/")
+def api_root():
+    return {
+        "message": "AI Data Cleaning Copilot API",
+        "endpoints": {
+            "GET /api/health": "Health check",
+            "GET /api/nlp/health": "NLP status check",
+            "GET /api/nlp/test?text=...": "Test NLP predictions from browser",
+            "POST /api/nlp/predict/{model_type}": "Production NLP prediction",
+            "POST /api/nlp/batch_file": "Batch process CSV/Excel",
+            "POST /api/upload": "Upload dataset for cleaning",
+        }
+    }
+
 @router.get("/nlp/health")
 def nlp_health():
-    if app.state.nlp_models is None:
-         return {"status": "offline", "message": "Models not loaded"}
     return {"status": "online"}
+
+@router.get("/nlp/test")
+def nlp_test(text: str):
+    """
+    GET endpoint for easily testing the NLP models from the browser.
+    Example: /api/nlp/test?text=this is a fake news tweet
+    """
+    if not text:
+        raise HTTPException(status_code=400, detail="Query parameter 'text' is required.")
+    return smart_predict(text)
 
 @router.post("/nlp/predict/{model_type}")
 def nlp_predict(model_type: str, req: NlpRequest):
-    if app.state.nlp_models is None:
-        # Load them on demand if failed on startup
-        app.state.nlp_models = load_models()
-
     text = req.text
-    models = app.state.nlp_models
 
     if model_type == "misinfo":
-        return predict_misinfo(text, models)
+        return predict_misinfo(text)
     elif model_type == "fakenews":
-        return predict_fakenews(text, models)
+        return predict_fakenews(text)
     elif model_type == "emosen":
-        return predict_emosen(text, models)
+        return predict_emosen(text)
     elif model_type == "all":
-        return predict_all(text, models)
+        return predict_all(text)
     elif model_type == "smart":
-        return smart_predict(text, models)
+        return smart_predict(text)
     elif model_type == "text":
         return {"text_analysis": analyse_text(text)}
     else:
@@ -119,18 +127,29 @@ async def nlp_batch_file(
     model_type: str = Form(...),
     column: str = Form(...)
 ):
-    if app.state.nlp_models is None:
-        app.state.nlp_models = load_models()
-
     if not file.filename.endswith(('.csv', '.xlsx')):
         raise HTTPException(status_code=400, detail="Only CSV or Excel files are accepted")
 
     content = await file.read()
     try:
+        if len(content) == 0:
+            raise HTTPException(status_code=400, detail="File is empty")
+
         if file.filename.endswith('.csv'):
-            df = pd.read_csv(io.BytesIO(content))
+            try:
+                df = pd.read_csv(io.BytesIO(content))
+            except pd.errors.EmptyDataError:
+                raise HTTPException(status_code=400, detail="File has no data or is invalid")
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid CSV file: {str(e)}")
         else:
-            df = pd.read_excel(io.BytesIO(content))
+            try:
+                df = pd.read_excel(io.BytesIO(content))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid Excel file: {str(e)}")
+
+        if len(df) == 0:
+            raise HTTPException(status_code=400, detail="File has no rows")
 
         if column not in df.columns:
             raise HTTPException(status_code=400, detail=f"Column '{column}' not found in file")
@@ -141,17 +160,17 @@ async def nlp_batch_file(
         results = []
         for text in texts:
             if model_type == "misinfo":
-                res = predict_misinfo(text, app.state.nlp_models)
+                res = predict_misinfo(text)
             elif model_type == "fakenews":
-                res = predict_fakenews(text, app.state.nlp_models)
+                res = predict_fakenews(text)
             elif model_type == "emosen":
-                res = predict_emosen(text, app.state.nlp_models)
+                res = predict_emosen(text)
             elif model_type == "all":
-                res = predict_all(text, app.state.nlp_models)
+                res = predict_all(text)
             elif model_type == "text":
                 res = {"text_analysis": analyse_text(text)}
             else:
-                res = smart_predict(text, app.state.nlp_models)
+                res = smart_predict(text)
             results.append(res)
 
         # Append results to the original dataframe
@@ -206,7 +225,12 @@ async def upload_file(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="File is empty")
 
         # Parse CSV
-        df = pd.read_csv(io.BytesIO(content))
+        try:
+            df = pd.read_csv(io.BytesIO(content))
+        except pd.errors.EmptyDataError:
+            raise HTTPException(status_code=400, detail="File has no data or is invalid")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid CSV file: {str(e)}")
 
         if len(df) == 0:
              raise HTTPException(status_code=400, detail="File has no rows")
@@ -387,6 +411,9 @@ def export_data():
         "columns": list(df_clean.columns)
     }
 
+# Include router at the bottom AFTER all routes have been defined
+app.include_router(router)
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=7860, reload=True)

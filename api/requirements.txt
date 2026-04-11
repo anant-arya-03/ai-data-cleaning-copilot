@@ -8,3 +8,6 @@ openpyxl
 pydantic
 torch
 transformers
+requests
+python-dotenv
+python-multipart

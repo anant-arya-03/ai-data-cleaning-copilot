@@ -4,7 +4,7 @@ import { Activity, ServerCrash, Globe } from 'lucide-react';
 import SingleTextAnalysis from './SingleTextAnalysis';
 import BatchAnalysis from './BatchAnalysis';
 import { cn } from '../../utils';
-import { NLP_API_URL, API_URL } from '../../config';
+import { API_URL } from '../../config';
 
 export default function CodeMixApp() {
   const [apiStatus, setApiStatus] = useState('checking'); // checking, online, offline
@@ -16,7 +16,7 @@ export default function CodeMixApp() {
 
   const checkApiStatus = async () => {
     try {
-      const res = await axios.get(`${NLP_API_URL}/health`, { timeout: 3000 });
+      const res = await axios.get(`${API_URL}/nlp/health`, { timeout: 3000 });
       setApiStatus(res.data.status);
     } catch (err) {
       setApiStatus('offline');
@@ -65,8 +65,8 @@ export default function CodeMixApp() {
         <div className="bg-rose-50 border border-rose-200 p-6 rounded-xl flex items-start shadow-sm">
           <ServerCrash className="w-8 h-8 text-rose-500 mr-4 flex-shrink-0" />
           <div>
-            <h3 className="text-lg font-bold text-rose-800 mb-1">NLP Models Not Loaded</h3>
-            <p className="text-rose-600 mb-2 font-medium">The NLP models failed to load. Please ensure paths in <code>models1.py</code> are correct and models are downloaded.</p>
+            <h3 className="text-lg font-bold text-rose-800 mb-1">Backend Connection Failed</h3>
+            <p className="text-rose-600 mb-2 font-medium">The frontend is unable to reach the FastAPI backend. If deployed on Vercel, ensure you have set the <code>VITE_HF_API_URL</code> environment variable to your Hugging Face Space URL.</p>
           </div>
         </div>
       )}
@@ -74,7 +74,7 @@ export default function CodeMixApp() {
       {/* Main Content Area - Fill height */}
       <div className={cn("flex-1 min-h-0 transition-opacity duration-300", apiStatus !== 'online' ? 'opacity-50 pointer-events-none' : 'opacity-100')}>
         {activeTab === 'single' ? (
-          <SingleTextAnalysis apiUrl={NLP_API_URL} />
+          <SingleTextAnalysis apiUrl={API_URL} />
         ) : (
             <BatchAnalysis />
         )}
